@@ -84,7 +84,8 @@ marg_rR0 = np.array(dm1_col.histogram())  # shape (200,)
 marg_alphaTheta = np.array(dm2_col.histogram())  # shape (200,)
 
 accepted = time_matrix.sum()
-print(f"Trajectories accepted: {accepted:_} / {N_TRAJ:_}")
+print(f"Trajectories accepted (time matrix): {accepted:_} / {N_TRAJ:_}")
+print(f"Trajectories accepted (param hist): {param_hist.sum(axis=1)}")
 if accepted == 0:
     print("⚠️  All collectors are zero. Try relaxing or removing your acceptance criteria.")
 

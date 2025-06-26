@@ -41,7 +41,7 @@ int main() {
     // --- 4) Data collectors ---
     int T_run = 60;
     int cut_off_day = 45;
-    int N_TRAJ = 100'000;
+    int N_TRAJ = 10'000'000;
 
     auto tm_col = std::make_unique<TimeMatrixCollector>(T_run, cut_off_day);
     auto ph_col = std::make_unique<DrawHistogramCollector>(params, 200);

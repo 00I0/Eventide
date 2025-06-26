@@ -9,7 +9,7 @@ Simulator::Simulator(const LatinHypercubeSampler& sampler,
                      const Scenario& scenario,
                      const CriterionGroup& criteria,
                      const DataCollectorGroup& collectors,
-                     const int numTrajectories,
+                     const int64_t numTrajectories,
                      const int chunkSize,
                      const int T_run,
                      const int maxCases,
@@ -30,8 +30,8 @@ Simulator::Simulator(const LatinHypercubeSampler& sampler,
 
 
 void Simulator::run() {
-    const int nChunks = (numTrajectories_ + chunkSize_ - 1) / chunkSize_;
-    std::atomic nextChunk{0};
+    const int64_t nChunks = (numTrajectories_ + chunkSize_ - 1) / chunkSize_;
+    std::atomic<int64_t> nextChunk{0};
 
     struct WorkerCtx {
         DataCollectorGroup collectors;
@@ -59,7 +59,7 @@ void Simulator::run() {
         WorkerCtx& wk = workers[w];
         wk.thread = std::thread([&, nChunks] {
             while (true) {
-                const int chunk = nextChunk.fetch_add(1, std::memory_order_relaxed);
+                const int64_t chunk = nextChunk.fetch_add(1, std::memory_order_relaxed);
                 if (chunk >= nChunks) break;
 
                 processChunk(chunk, wk.rng, wk.criteria, wk.collectors, wk.scenario, wk.sampler);
@@ -71,12 +71,13 @@ void Simulator::run() {
     for (auto& wk : workers) collectors_.merge(wk.collectors);
 }
 
-void Simulator::processChunk(const int chunkIndex, RngEngine& rng, CriterionGroup& criterionGroup,
+void Simulator::processChunk(const int64_t chunkIndex, RngEngine& rng, CriterionGroup& criterionGroup,
                              DataCollectorGroup& collectorGroup, Scenario& scenario,
                              LatinHypercubeSampler& sampler) const {
-    const int remain = numTrajectories_ - chunkIndex * chunkSize_;
-    const int blockSz = std::min(chunkSize_, remain);
+    const int64_t remain = numTrajectories_ - chunkIndex * static_cast<int64_t>(chunkSize_);
+    const int blockSz = std::min(static_cast<int64_t>(chunkSize_), remain);
     const auto block = sampler.sampleBlock(blockSz);
+
 
     for (const auto& draw : block) {
         if (draw.R0 * draw.r > 10) continue;
@@ -85,50 +86,56 @@ void Simulator::processChunk(const int chunkIndex, RngEngine& rng, CriterionGrou
         criterionGroup.reset();
         collectorGroup.reset();
         scenario.reset();
-        if (processTrajectory(draw, rng, criterionGroup, collectorGroup, scenario))
-            collectorGroup.save();
+        TrajectoryResult trajectoryResult = processTrajectory(draw, rng, criterionGroup, collectorGroup, scenario);
+        if (trajectoryResult != TrajectoryResult::REJECTED)
+            collectorGroup.save(trajectoryResult);
     }
 }
 
 
-bool Simulator::processTrajectory(const Draw& originalDraw, RngEngine& rng, CriterionGroup& criterionGroup,
-                                  DataCollectorGroup& collectorGroup, Scenario& scenario) const {
-    // std::cout << "Processing trajectory" << std::endl;
+TrajectoryResult Simulator::processTrajectory(const Draw& originalDraw, RngEngine& rng, CriterionGroup& criterionGroup,
+                                              DataCollectorGroup& collectorGroup, Scenario& scenario) const {
     Draw draw = originalDraw;
 
     // process the root
     const int nRoot = rng.negBinomial(draw.k, draw.R0);
     int cases = 0;
-    if (!criterionGroup.checkRoot(nRoot)) return false;
+    if (!criterionGroup.checkRoot(nRoot)) return TrajectoryResult::REJECTED;
 
     std::priority_queue<double, std::vector<double>, std::greater<double>> heap;
     for (int i = 0; i < nRoot; i++) {
         double newInfectionTime = rng.gamma(draw.alpha, draw.theta);
         criterionGroup.registerTime(newInfectionTime);
-        if (criterionGroup.earlyReject()) return false;
+        if (criterionGroup.earlyReject()) return TrajectoryResult::REJECTED;
         heap.push(newInfectionTime);
         collectorGroup.registerTime(newInfectionTime);
         cases++;
     }
-    // std::cout << cases << std::endl;
 
     while (!heap.empty() && cases < maxCases_) {
-        // std::cout << "in while " << heap.top() << std::endl;
         const bool accepted = simulateSegment(heap, cases, draw, rng, criterionGroup, collectorGroup,
-                                              scenario.nextTime());
+                                              scenario.nextTime(T_run_));
         if (!accepted)
-            return false;
+            return TrajectoryResult::REJECTED;
 
         if (heap.empty())
             break;
 
         const double currentTime = heap.top();
+        if (heap.top() > T_run_)
+            break;
+
         for (double changeTime = scenario.nextTime(); changeTime <= currentTime; changeTime = scenario.nextTime())
             scenario.applyNext(draw, originalDraw);
     }
 
     collectorGroup.recordDraw(originalDraw);
-    return criterionGroup.finalPassed();
+    if (!criterionGroup.finalPassed()) return TrajectoryResult::REJECTED;
+    if (!heap.empty() && heap.top() == std::numeric_limits<double>::infinity()) return TrajectoryResult::REJECTED;
+
+    if (cases >= maxCases_) return TrajectoryResult::CAPPED_AT_MAX_CASES;
+    if (!heap.empty() && heap.top() > T_run_) return TrajectoryResult::CAPPED_AT_T_RUN;
+    return TrajectoryResult::ACCEPTED;
 }
 
 bool Simulator::simulateSegment(std::priority_queue<double, std::vector<double>, std::greater<double>>& heap,

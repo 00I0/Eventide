@@ -4,6 +4,7 @@
 
 #include "Parameter.h"
 #include "Sampler.h"
+#include "TrajectoryResult.h"
 
 namespace eventide {
     /**
@@ -23,7 +24,7 @@ namespace eventide {
         virtual void recordDraw(const Draw& params) = 0;
 
         /// Commit per‐trajectory state into the long‐term storage.
-        virtual void save() = 0;
+        virtual void save(TrajectoryResult trajectoryResult) = 0;
 
         /// Merge another collector of the same concrete type into this one.
         /// (merges only the long-term storage).
@@ -34,7 +35,7 @@ namespace eventide {
     };
 
     /**
-     * @brief (T+1)×(T+1) matrix of [floor(finalTime)][floor(firstAfterCutoff)] counts.
+     * @brief (T+2)×(T+2) matrix of [floor(finalTime)][floor(firstAfterCutoff)] counts.
      */
     class TimeMatrixCollector final : public DataCollector {
     public:
@@ -51,7 +52,7 @@ namespace eventide {
         void registerTime(double t) override;
         void recordDraw(const Draw& draw) override {}
         void merge(const DataCollector& other) override;
-        void save() override;
+        void save(TrajectoryResult trajectoryResult) override;
 
         const std::vector<std::vector<long>>& matrix() const { return mat_; }
 
@@ -81,7 +82,7 @@ namespace eventide {
         void registerTime(double t) override {}
         void recordDraw(const Draw& draw) override;
         void merge(const DataCollector& other) override;
-        void save() override;
+        void save(TrajectoryResult trajectoryResult) override;
 
         const std::vector<std::vector<long>>& histogram() const { return hist_; }
 
@@ -108,7 +109,7 @@ namespace eventide {
         void registerTime(double t) override {}
         void recordDraw(const Draw& draw) override;
         void merge(const DataCollector& other) override;
-        void save() override;
+        void save(TrajectoryResult trajectoryResult) override;
 
 
         const std::vector<std::vector<long>>& heatmap() const { return heat_; }
@@ -138,7 +139,7 @@ namespace eventide {
         void registerTime(double t) override {}
         void recordDraw(const Draw& draw) override;
         void merge(const DataCollector& other) override;
-        void save() override;
+        void save(TrajectoryResult trajectoryResult) override;
 
 
         const std::vector<long>& histogram() const { return hist_; }
@@ -175,8 +176,8 @@ namespace eventide {
 
         void merge(const DataCollector& other) override;
 
-        void save() override {
-            for (const auto& c : collectors_) c->save();
+        void save(const TrajectoryResult trajectoryResult) override {
+            for (const auto& c : collectors_) c->save(trajectoryResult);
         }
 
         template <typename T>
@@ -188,12 +189,12 @@ namespace eventide {
         DataCollector* findByType(const std::type_index id) const {
             for (auto& up : collectors_)
 
-                #pragma clang diagnostic push
-                #pragma clang diagnostic ignored "-Wpotentially-evaluated-expression"
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpotentially-evaluated-expression"
 
                 if (std::type_index(typeid(*up)) == id) return up.get();
 
-                #pragma clang diagnostic pop
+#pragma clang diagnostic pop
             return nullptr;
         }
 

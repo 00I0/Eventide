@@ -6,13 +6,15 @@ using namespace eventide;
 
 // TimeMatrixCollector
 TimeMatrixCollector::TimeMatrixCollector(const int T, const int cutoffDay):
-    T_(T), cutoffDay_(cutoffDay), mat_(T + 1, std::vector<long>(T + 1, 0)), maxTime_(0), firstAfter_(T + 1) {}
+    T_(T), cutoffDay_(cutoffDay), mat_(T + 2, std::vector<long>(T + 2, 0)), maxTime_(0), firstAfter_(cutoffDay + 1) {
+    assert(cutoffDay <= T);
+}
 
 TimeMatrixCollector::TimeMatrixCollector(const TimeMatrixCollector& o):
-    T_(o.T_), cutoffDay_(o.cutoffDay_), mat_(o.mat_), maxTime_(0), firstAfter_(T_ + 1) {}
+    T_(o.T_), cutoffDay_(o.cutoffDay_), mat_(o.mat_), maxTime_(0), firstAfter_(cutoffDay_ + 1) {}
 
 void TimeMatrixCollector::registerTime(const double t) {
-    const int day = std::clamp(static_cast<int>(std::floor(t)), 0, T_);
+    const int day = std::clamp(static_cast<int>(std::floor(t)), 0, T_ + 1);
     if (day > maxTime_) maxTime_ = day;
     if (day > cutoffDay_ && day < firstAfter_) firstAfter_ = day;
 }
@@ -29,9 +31,9 @@ void TimeMatrixCollector::reset() {
     firstAfter_ = cutoffDay_ + 1;
 }
 
-void TimeMatrixCollector::save() {
-    const int j = std::clamp(firstAfter_, 0, T_);
-    mat_[maxTime_][j] += 1;
+void TimeMatrixCollector::save(const TrajectoryResult trajectoryResult) {
+    if (trajectoryResult == TrajectoryResult::CAPPED_AT_T_RUN || trajectoryResult == TrajectoryResult::ACCEPTED)
+        mat_[maxTime_][firstAfter_] += 1;
 
     reset();
 }
@@ -89,7 +91,7 @@ void DrawHistogramCollector::reset() {
     thetaBin_ = 0;
 }
 
-void DrawHistogramCollector::save() {
+void DrawHistogramCollector::save(const TrajectoryResult trajectoryResult) {
     hist_[static_cast<int>(DrawID::R0)][R0Bin_] += 1;
     hist_[static_cast<int>(DrawID::k)][kBin_] += 1;
     hist_[static_cast<int>(DrawID::r)][rBin_] += 1;
@@ -135,7 +137,7 @@ void JointHeatmapCollector::reset() {
     binJ_ = 0;
 }
 
-void JointHeatmapCollector::save() {
+void JointHeatmapCollector::save(const TrajectoryResult trajectoryResult) {
     heat_[binI_][binJ_] += 1;
     reset();
 }
@@ -169,7 +171,7 @@ void DerivedMarginalCollector::reset() {
     val_ = 0.0;
 }
 
-void DerivedMarginalCollector::save() {
+void DerivedMarginalCollector::save(const TrajectoryResult trajectoryResult) {
     if (val_ < lo_ || val_ > hi_) return;
     const int bin = std::min(static_cast<int>((val_ - lo_) / (hi_ - lo_) * bins_), bins_ - 1);
     hist_[bin] += 1;

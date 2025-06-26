@@ -35,8 +35,13 @@ namespace eventide {
         /// Reset to before any changes are applied.
         void reset();
 
-        double nextTime() const {
-            return nextIdx_ < cps_.size() ? cps_[nextIdx_].time : std::numeric_limits<double>::infinity();
+        double nextTime(const double cap) const noexcept {
+            const double t = nextTime();
+            return t < cap ? t : cap;
+        }
+
+        double nextTime() const noexcept {
+            return nextIdx_ < cps_.size() ? cps_[nextIdx_].time : DOUBLE_INF;
         }
 
         /// Apply the next change to the `current` map of parameter values.
@@ -51,6 +56,7 @@ namespace eventide {
         void applyNext(Draw& current, const Draw& original);
 
     private:
+        static constexpr double DOUBLE_INF = std::numeric_limits<double>::infinity();
         std::vector<ParameterChangePoint> cps_;
         size_t nextIdx_ = 0;
     };

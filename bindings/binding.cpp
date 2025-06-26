@@ -168,7 +168,7 @@ PYBIND11_MODULE(_eventide, m) {
                            Scenario& scenario,
                            const std::vector<Criterion*>& pyCrit,
                            const std::vector<DataCollector*>& pyColl,
-                           int numT, int chunk, int Tr, int maxC,
+                           int64_t numT, int chunk, int Tr, int maxC,
                            int workers, int cutoff) {
                     std::vector<std::unique_ptr<Criterion>> critCopies;
                     for (const auto* c : pyCrit) critCopies.emplace_back(c->clone());
