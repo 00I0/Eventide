@@ -25,7 +25,8 @@ namespace eventide {
                   int T_run,
                   int maxCases,
                   int maxWorkers,
-                  int cutoffDay);
+                  int cutoffDay,
+                  const CompiledExpression& paramValidator);
 
         void run();
 
@@ -39,6 +40,7 @@ namespace eventide {
         DataCollectorGroup collectors_;
         const int64_t numTrajectories_;
         const int chunkSize_, T_run_, maxCases_, maxWorkers_, cutoffDay_;
+        const CompiledExpression paramValidator_;
 
         bool simulateSegment(std::priority_queue<double, std::vector<double>, std::greater<double>>& heap,
                              int& cases, const Draw& draw, RngEngine& rng, CriterionGroup& criterionGroup,

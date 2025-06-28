@@ -14,7 +14,8 @@ Simulator::Simulator(const LatinHypercubeSampler& sampler,
                      const int T_run,
                      const int maxCases,
                      const int maxWorkers,
-                     const int cutoffDay)
+                     const int cutoffDay,
+                     const CompiledExpression& paramValidator)
     : sampler_(sampler),
       scenario_(scenario),
       criteria_(criteria),
@@ -24,7 +25,8 @@ Simulator::Simulator(const LatinHypercubeSampler& sampler,
       T_run_(T_run),
       maxCases_(maxCases),
       maxWorkers_(maxWorkers),
-      cutoffDay_(cutoffDay) {
+      cutoffDay_(cutoffDay),
+      paramValidator_(paramValidator) {
     assert(numTrajectories_ > 0 && chunkSize_ > 0 && T_run_ >= 0);
 }
 
@@ -80,8 +82,7 @@ void Simulator::processChunk(const int64_t chunkIndex, RngEngine& rng, Criterion
 
 
     for (const auto& draw : block) {
-        if (draw.R0 * draw.r > 10) continue;
-        if (draw.alpha * draw.theta < 1 || draw.alpha * draw.theta > 50) continue;
+        if (!paramValidator_.eval(draw)) continue;
 
         criterionGroup.reset();
         collectorGroup.reset();

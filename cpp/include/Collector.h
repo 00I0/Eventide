@@ -2,6 +2,7 @@
 #include <typeindex>
 #include <vector>
 
+#include "CompiledExpression.h"
 #include "Parameter.h"
 #include "Sampler.h"
 #include "TrajectoryResult.h"
@@ -66,90 +67,52 @@ namespace eventide {
         int firstAfter_;
     };
 
-    /**
-     * @brief Histogram of each base parameter over `nbins` bins.
-     */
-    class DrawHistogramCollector final : public DataCollector {
+
+    class Hist1D final : public DataCollector {
     public:
-        explicit DrawHistogramCollector(const std::vector<Parameter>& params, int nbins);
-        DrawHistogramCollector(const DrawHistogramCollector& o);
+        explicit Hist1D(const CompiledExpression& expression, int bins, double lo, double hi);
+        Hist1D(const Hist1D& other);
 
-        std::unique_ptr<DataCollector> clone() const override {
-            return std::make_unique<DrawHistogramCollector>(*this);
-        }
+        std::unique_ptr<DataCollector> clone() const override { return std::make_unique<Hist1D>(*this); }
 
-        void reset() override;
+        void reset() override {}
         void registerTime(double t) override {}
         void recordDraw(const Draw& draw) override;
         void merge(const DataCollector& other) override;
         void save(TrajectoryResult trajectoryResult) override;
 
-        const std::vector<std::vector<long>>& histogram() const { return hist_; }
+        std::vector<long> histogram() const { return hist_; }
 
     private:
-        std::vector<Parameter> params_;
-        int nbins_;
-        std::vector<std::vector<long>> hist_; // long-term
-        int R0Bin_, rBin_, kBin_, alphaBin_, thetaBin_; // per-trajectory
-    };
-
-    /**
-     * @brief 2D heatmap of (R0 vs. r) pairs.
-     */
-    class JointHeatmapCollector final : public DataCollector {
-    public:
-        JointHeatmapCollector(double R0min, double R0max, double rmin, double rmax, int bins);
-        JointHeatmapCollector(const JointHeatmapCollector& o);
-
-        std::unique_ptr<DataCollector> clone() const override {
-            return std::make_unique<JointHeatmapCollector>(*this);
-        }
-
-        void reset() override;
-        void registerTime(double t) override {}
-        void recordDraw(const Draw& draw) override;
-        void merge(const DataCollector& other) override;
-        void save(TrajectoryResult trajectoryResult) override;
-
-
-        const std::vector<std::vector<long>>& heatmap() const { return heat_; }
-
-    private:
-        double R0min_, R0max_, rmin_, rmax_;
+        CompiledExpression expression_;
         int bins_;
-        std::vector<std::vector<long>> heat_;
-        int binI_, binJ_; // per-trajectory
-    };
-
-    /**
-     * @brief 1D histogram of either R0*r or alpha*theta.
-     */
-    class DerivedMarginalCollector final : public DataCollector {
-    public:
-        enum class Product { R0_r, AlphaTheta };
-
-        DerivedMarginalCollector(Product prod, double lo, double hi, int bins);
-        DerivedMarginalCollector(const DerivedMarginalCollector& o);
-
-        std::unique_ptr<DataCollector> clone() const override {
-            return std::make_unique<DerivedMarginalCollector>(*this);
-        }
-
-        void reset() override;
-        void registerTime(double t) override {}
-        void recordDraw(const Draw& draw) override;
-        void merge(const DataCollector& other) override;
-        void save(TrajectoryResult trajectoryResult) override;
-
-
-        const std::vector<long>& histogram() const { return hist_; }
-
-    private:
-        Product prod_;
         double lo_, hi_;
-        int bins_;
         std::vector<long> hist_;
-        double val_; // per-trajectory
+        double val_; // per trajectory
+    };
+
+    class Hist2D final : public DataCollector {
+    public:
+        explicit Hist2D(const CompiledExpression& expressionX, const CompiledExpression& expressionY,
+                        int bins, double loX, double hiX, double loY, double hiY);
+        Hist2D(const Hist2D& other);
+
+        std::unique_ptr<DataCollector> clone() const override { return std::make_unique<Hist2D>(*this); }
+
+        void reset() override {}
+        void registerTime(double t) override {}
+        void recordDraw(const Draw& draw) override;
+        void merge(const DataCollector& other) override;
+        void save(TrajectoryResult trajectoryResult) override;
+
+        std::vector<std::vector<long>> histogram() const { return hist_; }
+
+    private:
+        CompiledExpression expressionX_, expressionY_;
+        int bins_;
+        double loX_, hiX_, loY_, hiY_;
+        std::vector<std::vector<long>> hist_;
+        double valX_, valY_; // per trajectory
     };
 
     class DataCollectorGroup final : public DataCollector {

@@ -38,140 +38,19 @@ void TimeMatrixCollector::save(const TrajectoryResult trajectoryResult) {
     reset();
 }
 
+//Hist1D
+Hist1D::Hist1D(const CompiledExpression& expression, const int bins, const double lo, const double hi):
+    expression_(expression), bins_(bins), lo_(lo), hi_(hi), hist_(bins, 0), val_(0.0) {}
 
-// DrawHistogramCollector
-DrawHistogramCollector::DrawHistogramCollector(const std::vector<Parameter>& params, const int nbins):
-    params_(params),
-    nbins_(nbins),
-    hist_(5, std::vector<long>(nbins, 0)),
-    R0Bin_(0), rBin_(0), kBin_(0), alphaBin_(0), thetaBin_(0) {
-    assert(nbins > 0);
-    assert(params.size() == 5);
+
+Hist1D::Hist1D(const Hist1D& other): expression_(other.expression_), bins_(other.bins_), lo_(other.lo_),
+                                     hi_(other.hi_), hist_(other.hist_), val_(0.0) {}
+
+void Hist1D::recordDraw(const Draw& draw) {
+    val_ = expression_.eval(draw);
 }
 
-DrawHistogramCollector::DrawHistogramCollector(const DrawHistogramCollector& o):
-    params_(o.params_),
-    nbins_(o.nbins_),
-    hist_(o.hist_),
-    R0Bin_(0), rBin_(0), kBin_(0), alphaBin_(0), thetaBin_(0) {}
-
-void DrawHistogramCollector::recordDraw(const Draw& draw) {
-    double lo = params_[static_cast<int>(DrawID::R0)].min, hi = params_[static_cast<int>(DrawID::R0)].max;
-    R0Bin_ = hi == lo ? 0 : std::min(static_cast<int>((draw.R0 - lo) / (hi - lo) * nbins_), nbins_ - 1);
-
-    lo = params_[static_cast<int>(DrawID::k)].min, hi = params_[static_cast<int>(DrawID::k)].max;
-    kBin_ = hi == lo ? 0 : std::min(static_cast<int>((draw.k - lo) / (hi - lo) * nbins_), nbins_ - 1);
-
-    lo = params_[static_cast<int>(DrawID::r)].min, hi = params_[static_cast<int>(DrawID::r)].max;
-    rBin_ = hi == lo ? 0 : std::min(static_cast<int>((draw.r - lo) / (hi - lo) * nbins_), nbins_ - 1);
-
-    lo = params_[static_cast<int>(DrawID::alpha)].min, hi = params_[static_cast<int>(DrawID::alpha)].max;
-    alphaBin_ = hi == lo ? 0 : std::min(static_cast<int>((draw.alpha - lo) / (hi - lo) * nbins_), nbins_ - 1);
-
-    lo = params_[static_cast<int>(DrawID::theta)].min, hi = params_[static_cast<int>(DrawID::theta)].max;
-    thetaBin_ = hi == lo ? 0 : std::min(static_cast<int>((draw.theta - lo) / (hi - lo) * nbins_), nbins_ - 1);
-}
-
-void DrawHistogramCollector::merge(const DataCollector& other) {
-    auto const& o = dynamic_cast<const DrawHistogramCollector&>(other);
-
-    for (size_t i = 0; i < hist_.size(); ++i) {
-        assert(o.hist_[i].size() == hist_[i].size());
-        for (size_t b = 0; b < hist_[i].size(); ++b)
-            hist_[i][b] += o.hist_[i][b];
-    }
-}
-
-
-void DrawHistogramCollector::reset() {
-    R0Bin_ = 0;
-    rBin_ = 0;
-    kBin_ = 0;
-    alphaBin_ = 0;
-    thetaBin_ = 0;
-}
-
-void DrawHistogramCollector::save(const TrajectoryResult trajectoryResult) {
-    hist_[static_cast<int>(DrawID::R0)][R0Bin_] += 1;
-    hist_[static_cast<int>(DrawID::k)][kBin_] += 1;
-    hist_[static_cast<int>(DrawID::r)][rBin_] += 1;
-    hist_[static_cast<int>(DrawID::alpha)][alphaBin_] += 1;
-    hist_[static_cast<int>(DrawID::theta)][thetaBin_] += 1;
-
-    reset();
-}
-
-
-// JointHeatmapCollector
-JointHeatmapCollector::JointHeatmapCollector(const double R0min, const double R0max, const double rmin,
-                                             const double rmax, const int bins):
-    R0min_(R0min), R0max_(R0max), rmin_(rmin), rmax_(rmax), bins_(bins), heat_(bins, std::vector<long>(bins, 0)),
-    binI_(0), binJ_(0) {
-    assert(bins > 0);
-}
-
-
-JointHeatmapCollector::JointHeatmapCollector(const JointHeatmapCollector& o):
-    R0min_(o.R0min_), R0max_(o.R0max_), rmin_(o.rmin_), rmax_(o.rmax_), bins_(o.bins_), heat_(o.heat_), binI_(0),
-    binJ_(0) {}
-
-
-void JointHeatmapCollector::recordDraw(const Draw& draw) {
-    const double R0 = draw.R0, r = draw.r;
-    if (R0 < R0min_ || R0 > R0max_ || r < rmin_ || r > rmax_) return;
-
-    binI_ = std::min(static_cast<int>((R0 - R0min_) / (R0max_ - R0min_) * bins_), bins_ - 1);
-    binJ_ = std::min(static_cast<int>((r - rmin_) / (rmax_ - rmin_) * bins_), bins_ - 1);
-}
-
-void JointHeatmapCollector::merge(const DataCollector& other) {
-    const auto& o = dynamic_cast<const JointHeatmapCollector&>(other);
-    assert(o.heat_.size() == heat_.size());
-    for (int i = 0; i < bins_; i++)
-        for (int j = 0; j < bins_; j++)
-            heat_[i][j] += o.heat_[i][j];
-}
-
-void JointHeatmapCollector::reset() {
-    binI_ = 0;
-    binJ_ = 0;
-}
-
-void JointHeatmapCollector::save(const TrajectoryResult trajectoryResult) {
-    heat_[binI_][binJ_] += 1;
-    reset();
-}
-
-
-// DerivedMarginalCollector
-DerivedMarginalCollector::DerivedMarginalCollector(const Product prod, const double lo, const double hi,
-                                                   const int bins):
-    prod_(prod), lo_(lo), hi_(hi), bins_(bins), hist_(bins, 0), val_(0.0) {
-    assert(bins > 0 && lo < hi);
-}
-
-DerivedMarginalCollector::DerivedMarginalCollector(const DerivedMarginalCollector& o):
-    prod_(o.prod_), lo_(o.lo_), hi_(o.hi_), bins_(o.bins_), hist_(o.hist_), val_(0.0) {}
-
-
-void DerivedMarginalCollector::recordDraw(const Draw& draw) {
-    if (prod_ == Product::R0_r) val_ = draw.R0 * draw.r;
-    else if (prod_ == Product::AlphaTheta) val_ = draw.alpha * draw.theta;
-}
-
-
-void DerivedMarginalCollector::merge(const DataCollector& other) {
-    const auto& o = dynamic_cast<const DerivedMarginalCollector&>(other);
-    assert(o.hist_.size() == hist_.size());
-    for (size_t i = 0; i < hist_.size(); ++i)
-        hist_[i] += o.hist_[i];
-}
-
-void DerivedMarginalCollector::reset() {
-    val_ = 0.0;
-}
-
-void DerivedMarginalCollector::save(const TrajectoryResult trajectoryResult) {
+void Hist1D::save(TrajectoryResult trajectoryResult) {
     if (val_ < lo_ || val_ > hi_) return;
     const int bin = std::min(static_cast<int>((val_ - lo_) / (hi_ - lo_) * bins_), bins_ - 1);
     hist_[bin] += 1;
@@ -179,9 +58,47 @@ void DerivedMarginalCollector::save(const TrajectoryResult trajectoryResult) {
     reset();
 }
 
+void Hist1D::merge(const DataCollector& other) {
+    const auto& o = dynamic_cast<const Hist1D&>(other);
+    assert(o.hist_.size() == hist_.size());
+    for (size_t i = 0; i < hist_.size(); ++i)
+        hist_[i] += o.hist_[i];
+}
+
+
+//Hist2D
+Hist2D::Hist2D(const CompiledExpression& expressionX, const CompiledExpression& expressionY,
+               const int bins, const double loX, const double hiX, const double loY, const double hiY):
+    expressionX_(expressionX), expressionY_(expressionY), bins_(bins), loX_(loX), hiX_(hiX), loY_(loY), hiY_(hiY),
+    hist_(bins, std::vector<long>(bins, 0)), valX_(0.0), valY_(0.0) {}
+
+Hist2D::Hist2D(const Hist2D& other): expressionX_(other.expressionX_), expressionY_(other.expressionY_),
+                                     bins_(other.bins_), loX_(other.loX_), hiX_(other.hiX_), loY_(other.loY_),
+                                     hiY_(other.hiY_), hist_(other.hist_), valX_(0.0), valY_(0.0) {}
+
+void Hist2D::recordDraw(const Draw& draw) {
+    valX_ = expressionX_.eval(draw);
+    valY_ = expressionY_.eval(draw);
+}
+
+void Hist2D::save(const TrajectoryResult trajectoryResult) {
+    if (valX_ < loX_ || valX_ > hiX_ || valY_ < loY_ || valY_ > hiY_) return;
+
+    const int binX = std::min(static_cast<int>((valX_ - loX_) / (hiX_ - loX_) * bins_), bins_ - 1);
+    const int binY = std::min(static_cast<int>((valY_ - loY_) / (hiY_ - loY_) * bins_), bins_ - 1);
+    hist_[binX][binY] += 1;
+}
+
+void Hist2D::merge(const DataCollector& other) {
+    const auto& o = dynamic_cast<const Hist2D&>(other);
+    assert(o.hist_.size() == hist_.size());
+    for (int i = 0; i < bins_; i++)
+        for (int j = 0; j < bins_; j++)
+            hist_[i][j] += o.hist_[i][j];
+}
+
 
 //DataCollectorGroup
-
 DataCollectorGroup::DataCollectorGroup(std::vector<std::unique_ptr<DataCollector>> collectors):
     collectors_(std::move(collectors)) {}
 

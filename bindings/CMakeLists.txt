@@ -12,6 +12,8 @@ FetchContent_MakeAvailable(pybind11)
 
 pybind11_add_module(_eventide binding.cpp)
 target_link_libraries(_eventide PRIVATE eventide_core)
+
+
 set_target_properties(_eventide PROPERTIES
         OUTPUT_NAME "_eventide"                              # module name
         PREFIX ""                                            # no "lib" prefix

@@ -7,6 +7,7 @@ add_library(eventide_core
         src/Collector.cpp
         src/RngEngine.cpp
         src/Simulator.cpp
+        src/CompiledExpression.cpp
 )
 target_include_directories(eventide_core
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
