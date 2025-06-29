@@ -41,12 +41,13 @@ namespace eventide {
 
           void run() const {
                core->run();
-               auto& collectors = core->collectors();
+               auto& clone_group = core->collectors(); // DataCollectorGroup
+               const size_t n_clones = clone_group.size();
+               const size_t n_orig = originals.size();
 
-               for (auto* orig : originals) {
-                    if (const auto* clone = collectors.findByType(typeid(*orig)))
-                         orig->merge(*clone);
-               }
+               const size_t n = std::min(n_clones, n_orig);
+               for (size_t i = 0; i < n; ++i)
+                    originals[i]->merge(*clone_group.at(i));
           }
      };
 }
@@ -114,13 +115,13 @@ PYBIND11_MODULE(_eventide, m) {
 
      // Scenario & ChangePoints
      py::class_<ParameterChangePoint>(m, "ParameterChangePoint")
-          .def(py::init([](const double time, const std::string& paramName, const double newValue) {
-                    return ParameterChangePoint(time, name_to_id(paramName), newValue);
+          .def(py::init([](const double time, const std::string& paramName, const CompiledExpression& expression) {
+                    return ParameterChangePoint(time, name_to_id(paramName), expression);
                }),
                py::arg("time"),
                py::arg("param"),
-               py::arg("new_value"),
-               "At <time>, set <param> to <new_value> (param is case-insensitive string)."
+               py::arg("expr"),
+               "At <time>, set <param> to <new_value>."
           )
           .def(py::init([](const double time, const std::string& paramName) {
                     return ParameterChangePoint(time, name_to_id(paramName));
@@ -192,7 +193,7 @@ PYBIND11_MODULE(_eventide, m) {
                            const std::vector<DataCollector*>& pyColl,
                            const CompiledExpression& validator,
                            int64_t numT, int chunk, int Tr, int maxC,
-                           int workers, int cutoff) {
+                           int workers) {
                     std::vector<std::unique_ptr<Criterion>> critCopies;
                     for (const auto* c : pyCrit) critCopies.emplace_back(c->clone());
                     CriterionGroup critGroup(std::move(critCopies));
@@ -206,7 +207,7 @@ PYBIND11_MODULE(_eventide, m) {
                          sampler, scenario,
                          critGroup, collGroup,
                          numT, chunk, Tr, maxC,
-                         workers, cutoff, validator);
+                         workers, validator);
 
 
                     return PySimulator(std::move(core), pyColl);
@@ -220,7 +221,6 @@ PYBIND11_MODULE(_eventide, m) {
                py::arg("chunk_size"),
                py::arg("T_run"),
                py::arg("max_cases"),
-               py::arg("max_workers"),
-               py::arg("cutoff_day"))
+               py::arg("max_workers"))
           .def("run", &PySimulator::run);
 }

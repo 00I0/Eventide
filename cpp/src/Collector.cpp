@@ -6,12 +6,12 @@ using namespace eventide;
 
 // TimeMatrixCollector
 TimeMatrixCollector::TimeMatrixCollector(const int T, const int cutoffDay):
-    T_(T), cutoffDay_(cutoffDay), mat_(T + 2, std::vector<long>(T + 2, 0)), maxTime_(0), firstAfter_(cutoffDay + 1) {
+    T_(T), cutoffDay_(cutoffDay), mat_(T + 2, std::vector<long>(T + 2, 0)), maxTime_(0), firstAfter_(T + 1) {
     assert(cutoffDay <= T);
 }
 
 TimeMatrixCollector::TimeMatrixCollector(const TimeMatrixCollector& o):
-    T_(o.T_), cutoffDay_(o.cutoffDay_), mat_(o.mat_), maxTime_(0), firstAfter_(cutoffDay_ + 1) {}
+    T_(o.T_), cutoffDay_(o.cutoffDay_), mat_(o.mat_), maxTime_(0), firstAfter_(o.T_ + 1) {}
 
 void TimeMatrixCollector::registerTime(const double t) {
     const int day = std::clamp(static_cast<int>(std::floor(t)), 0, T_ + 1);
@@ -21,14 +21,14 @@ void TimeMatrixCollector::registerTime(const double t) {
 
 void TimeMatrixCollector::merge(const DataCollector& other) {
     auto const& o = dynamic_cast<TimeMatrixCollector const&>(other);
-    for (int i = 0; i <= T_; i++)
-        for (int j = 0; j <= T_; j++)
+    for (int i = 0; i <= T_ + 1; i++)
+        for (int j = 0; j <= T_ + 1; j++)
             mat_[i][j] += o.mat_[i][j];
 }
 
 void TimeMatrixCollector::reset() {
     maxTime_ = 0;
-    firstAfter_ = cutoffDay_ + 1;
+    firstAfter_ = T_ + 1;
 }
 
 void TimeMatrixCollector::save(const TrajectoryResult trajectoryResult) {

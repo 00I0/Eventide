@@ -1,4 +1,18 @@
 # Build the core C++ library
+
+include(FetchContent)
+
+# --------------------------------------------------------------------
+# 1) Fetch ExprTk (header-only) from GitHub
+# --------------------------------------------------------------------
+FetchContent_Declare(
+        exprtk
+        GIT_REPOSITORY https://github.com/ArashPartow/exprtk.git
+        GIT_TAG master           # or pin to a release tag/commit
+)
+FetchContent_MakeAvailable(exprtk)
+
+
 add_library(eventide_core
         src/Parameter.cpp
         src/Sampler.cpp
@@ -11,6 +25,7 @@ add_library(eventide_core
 )
 target_include_directories(eventide_core
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+        $<BUILD_INTERFACE:${exprtk_SOURCE_DIR}>
 )
 find_package(Threads REQUIRED)
 target_link_libraries(eventide_core PUBLIC Threads::Threads)

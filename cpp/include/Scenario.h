@@ -1,6 +1,8 @@
 #pragma once
+#include <iostream>
 #include <vector>
 
+#include "CompiledExpression.h"
 #include "Sampler.h"
 
 
@@ -13,14 +15,15 @@ namespace eventide {
         double time;
         DrawID which;
         bool isRestore;
-        double newValue;
+        std::shared_ptr<CompiledExpression> expression;
 
-        ParameterChangePoint(const double time_, const DrawID which_, const double newValue_)
-            : time(time_), which(which_), isRestore(false), newValue(newValue_) {}
+        ParameterChangePoint(const double time_, const DrawID which_, const CompiledExpression& expression_)
+            : time(time_), which(which_), isRestore(false),
+              expression(std::make_shared<CompiledExpression>(expression_)) {}
 
         /** ctor for “restore to original” */
         ParameterChangePoint(const double time_, const DrawID which_)
-            : time(time_), which(which_), isRestore(true), newValue(0.0) {}
+            : time(time_), which(which_), isRestore(true), expression(std::make_shared<CompiledExpression>("0.0")) {}
     };
 
     /**

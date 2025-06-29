@@ -143,23 +143,13 @@ namespace eventide {
             for (const auto& c : collectors_) c->save(trajectoryResult);
         }
 
-        template <typename T>
-        T* get() const {
-            for (auto& c : collectors_) if (auto p = dynamic_cast<T*>(c.get())) return p;
-            return nullptr;
+        size_t size() const {
+            return collectors_.size();
         }
 
-        DataCollector* findByType(const std::type_index id) const {
-            for (auto& up : collectors_)
+        std::unique_ptr<DataCollector>& at(const size_t i) { return collectors_.at(i); }
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpotentially-evaluated-expression"
-
-                if (std::type_index(typeid(*up)) == id) return up.get();
-
-#pragma clang diagnostic pop
-            return nullptr;
-        }
+        const std::unique_ptr<DataCollector>& at(const size_t i) const { return collectors_.at(i); }
 
     private:
         std::vector<std::unique_ptr<DataCollector>> collectors_;

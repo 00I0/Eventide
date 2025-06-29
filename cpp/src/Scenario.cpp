@@ -19,7 +19,7 @@ void Scenario::applyNext(Draw& current, const Draw& original) {
     const auto& cp = cps_[nextIdx_];
     const auto which = cp.which;
     const auto isRestore = cp.isRestore;
-    const auto newValue = cp.newValue;
+    const auto newValue = cp.expression->eval(current);
 
 
     const

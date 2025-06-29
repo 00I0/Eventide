@@ -1,10 +1,9 @@
+from dataclasses import dataclass
+from datetime import datetime
+
 # noinspection PyUnresolvedReferences
 from ._eventide import (
     Parameter,
-    ParameterChangePoint,
-    Scenario,
-    OffspringCriterion,
-    IntervalCriterion,
     LatinHypercubeSampler,
     _Expr,
     _Hist1D,
@@ -19,34 +18,47 @@ eventide – friendly Python facade for the C++ branching-process core.
 
 # ---- pure-python helpers -------------------------------------------------
 from .parameter import Parameters
-from .collectors import Hist1D, Hist2D, TimeMatrix
+from .collectors import Hist1D, Hist2D, TimeMatrix, Collector
+from .criterion import IntervalCriterion, IndexOffspringCriterion, Criterion
+from .scenario import Scenario, ParameterChangePoint
 
 __all__ = [
-    # low-level
     "Parameter", "ParameterChangePoint", "Scenario",
-    "OffspringCriterion", "IntervalCriterion", "LatinHypercubeSampler",
-    # helpers
+    "IndexOffspringCriterion", "IntervalCriterion", "LatinHypercubeSampler",
     "Parameters", "Hist1D", "Hist2D", "Simulator", "TimeMatrix"
 ]
 
 
-# Thin alias that hides _Expr / _Hist* from end-users
-def Simulator(*, sampler, scenario, criteria, collectors, num_trajectories: int, chunk_size: int, T_run: int,
-              max_cases: int, max_workers: int, cutoff_day: int, validators: list = None):
-    if validators is None: validators = []
+@dataclass(frozen=True, slots=True)
+class Simulator:
+    parameters: Parameters
+    sampler: LatinHypercubeSampler
+    start_date: datetime
+    scenario: Scenario
+    criteria: list[Criterion]
+    collectors: list[Collector]
+    num_trajectories: int
+    chunk_size: int
+    T_run: int
+    max_cases: int
+    max_workers: int
 
-    if validators:
-        body = " && ".join(f"({expr})" for expr in validators)
-    else:
-        body = "true"
+    def run(self) -> None:
+        validators = self.parameters.validators() or []
+        body = " and ".join(f"({expr})" for expr in validators) if validators else "true"
 
-    cpp_collectors = []
-    for c in collectors:
-        if hasattr(c, "_col"):
-            cpp_collectors.append(c._col)
-        else:
-            cpp_collectors.append(c)
+        cpp_collectors = [c._get_cpp_collector(self.T_run, self.start_date) for c in self.collectors]
+        cpp_criteria = [c._get_cpp_criterion(self.start_date) for c in self.criteria]
 
-    return _PySimulator(sampler, scenario, criteria, cpp_collectors, _Expr(body), num_trajectories,
-                        chunk_size, T_run,
-                        max_cases, max_workers, cutoff_day)
+        _PySimulator(
+            self.sampler,
+            self.scenario._get_cpp_scenario(self.start_date),
+            cpp_criteria,
+            cpp_collectors,
+            _Expr(body),
+            self.num_trajectories,
+            self.chunk_size,
+            self.T_run,
+            self.max_cases,
+            self.max_workers
+        ).run()

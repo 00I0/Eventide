@@ -1,24 +1,22 @@
-// CompiledExpression.h
 #pragma once
 #include <string>
-
-#include <fstream>
-#include <filesystem>
-#include <stdexcept>
-#include <sstream>
-#include <dlfcn.h>
-
-#include "Sampler.h"
+#include "Sampler.h"   // for eventide::Draw
 
 namespace eventide {
     class CompiledExpression {
     public:
         explicit CompiledExpression(const std::string& expr);
-        double eval(const Draw& draw) const;
+
+
+        ~CompiledExpression();
+
+        double eval(const Draw& d) const;
+
+        std::string expr() const { return expr_; };
 
     private:
+        const std::string expr_;
         struct Impl;
-
         std::shared_ptr<Impl> impl_;
     };
 }

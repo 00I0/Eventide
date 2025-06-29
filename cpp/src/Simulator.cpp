@@ -14,7 +14,6 @@ Simulator::Simulator(const LatinHypercubeSampler& sampler,
                      const int T_run,
                      const int maxCases,
                      const int maxWorkers,
-                     const int cutoffDay,
                      const CompiledExpression& paramValidator)
     : sampler_(sampler),
       scenario_(scenario),
@@ -25,7 +24,6 @@ Simulator::Simulator(const LatinHypercubeSampler& sampler,
       T_run_(T_run),
       maxCases_(maxCases),
       maxWorkers_(maxWorkers),
-      cutoffDay_(cutoffDay),
       paramValidator_(paramValidator) {
     assert(numTrajectories_ > 0 && chunkSize_ > 0 && T_run_ >= 0);
 }
