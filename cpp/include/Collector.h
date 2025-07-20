@@ -19,7 +19,7 @@ namespace eventide {
         virtual void reset() = 0;
 
         /// Called on each new infection time (optional).
-        virtual void registerTime(double t) = 0;
+        virtual void registerTime(double parentInfectionTime, double newInfectionTime) = 0;
 
         /// Or: record parameters of the accepted trajectory.
         virtual void recordDraw(const Draw& params) = 0;
@@ -50,7 +50,7 @@ namespace eventide {
         }
 
         void reset() override;
-        void registerTime(double t) override;
+        void registerTime(double parentInfectionTime, double newInfectionTime) override;
         void recordDraw(const Draw& draw) override {}
         void merge(const DataCollector& other) override;
         void save(TrajectoryResult trajectoryResult) override;
@@ -76,7 +76,7 @@ namespace eventide {
         std::unique_ptr<DataCollector> clone() const override { return std::make_unique<Hist1D>(*this); }
 
         void reset() override {}
-        void registerTime(double t) override {}
+        void registerTime(const double parentInfectionTime, const double newInfectionTime) override {}
         void recordDraw(const Draw& draw) override;
         void merge(const DataCollector& other) override;
         void save(TrajectoryResult trajectoryResult) override;
@@ -100,7 +100,7 @@ namespace eventide {
         std::unique_ptr<DataCollector> clone() const override { return std::make_unique<Hist2D>(*this); }
 
         void reset() override {}
-        void registerTime(double t) override {}
+        void registerTime(const double parentInfectionTime, const double newInfectionTime) override {}
         void recordDraw(const Draw& draw) override;
         void merge(const DataCollector& other) override;
         void save(TrajectoryResult trajectoryResult) override;
@@ -129,8 +129,8 @@ namespace eventide {
             for (const auto& c : collectors_) c->reset();
         }
 
-        void registerTime(const double t) override {
-            for (const auto& c : collectors_) c->registerTime(t);
+        void registerTime(const double parentInfectionTime, const double newInfectionTime) override {
+            for (const auto& c : collectors_) c->registerTime(parentInfectionTime, newInfectionTime);
         }
 
         void recordDraw(const Draw& params) override {
@@ -153,5 +153,72 @@ namespace eventide {
 
     private:
         std::vector<std::unique_ptr<DataCollector>> collectors_;
+    };
+
+
+    class DrawCollector final : public DataCollector {
+    public:
+        explicit DrawCollector() = default;
+        DrawCollector(const DrawCollector& other) = default;
+
+        std::unique_ptr<DataCollector> clone() const override { return std::make_unique<DrawCollector>(*this); }
+
+        void reset() override {}
+        void registerTime(const double parentInfectionTime, const double newInfectionTime) override {}
+        void recordDraw(const Draw& draw) override;
+        void merge(const DataCollector& other) override;
+        void save(TrajectoryResult trajectoryResult) override;
+
+        std::vector<std::array<double, 5>> draws() const noexcept { return draws_; }
+
+    private:
+        std::vector<std::array<double, 5>> draws_;
+        std::array<double, 5> currentDraw_;
+    };
+
+    class ActiveSetSizeCollector final : public DataCollector {
+    public:
+        explicit ActiveSetSizeCollector(double collectionTime);
+        ActiveSetSizeCollector(const ActiveSetSizeCollector& other) = default;
+
+        std::unique_ptr<DataCollector> clone() const override {
+            return std::make_unique<ActiveSetSizeCollector>(*this);
+        }
+
+        void reset() override;
+        void registerTime(double parentInfectionTime, double newInfectionTime) override;
+        void recordDraw(const Draw& draw) override {}
+        void merge(const DataCollector& other) override;
+        void save(TrajectoryResult trajectoryResult) override;
+
+        std::vector<double> activeSetSizes() const noexcept { return activeSetSizes_; }
+
+    private:
+        int currentActiveSetSize = 0;
+        double collectionTime_;
+        std::vector<double> activeSetSizes_;
+    };
+
+
+    class InfectionTimeCollector final : public DataCollector {
+    public:
+        explicit InfectionTimeCollector() = default;
+        InfectionTimeCollector(const InfectionTimeCollector& other) = default;
+
+        std::unique_ptr<DataCollector> clone() const override {
+            return std::make_unique<InfectionTimeCollector>(*this);
+        }
+
+        void reset() override;
+        void registerTime(double parentInfectionTime, double newInfectionTime) override;
+        void recordDraw(const Draw& draw) override {}
+        void merge(const DataCollector& other) override;
+        void save(TrajectoryResult trajectoryResult) override;
+
+        std::vector<std::vector<double>> infectionTimes() const noexcept { return allInfectionTimes_; }
+
+    private:
+        std::vector<double> currentInfectionTimes_;
+        std::vector<std::vector<double>> allInfectionTimes_;
     };
 }

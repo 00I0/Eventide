@@ -13,8 +13,8 @@ TimeMatrixCollector::TimeMatrixCollector(const int T, const int cutoffDay):
 TimeMatrixCollector::TimeMatrixCollector(const TimeMatrixCollector& o):
     T_(o.T_), cutoffDay_(o.cutoffDay_), mat_(o.mat_), maxTime_(0), firstAfter_(o.T_ + 1) {}
 
-void TimeMatrixCollector::registerTime(const double t) {
-    const int day = std::clamp(static_cast<int>(std::floor(t)), 0, T_ + 1);
+void TimeMatrixCollector::registerTime(const double parentInfectionTime, const double newInfectionTime) {
+    const int day = std::clamp(static_cast<int>(std::floor(newInfectionTime)), 0, T_ + 1);
     if (day > maxTime_) maxTime_ = day;
     if (day > cutoffDay_ && day < firstAfter_) firstAfter_ = day;
 }
@@ -115,6 +115,87 @@ void DataCollectorGroup::merge(const DataCollector& other) {
     for (size_t i = 0; i < collectors_.size(); ++i)
         collectors_[i]->merge(*o.collectors_[i]);
 }
+
+
+// DrawCollector
+void DrawCollector::recordDraw(const Draw& draw) {
+    currentDraw_[static_cast<size_t>(DrawID::R0)] = draw.R0;
+    currentDraw_[static_cast<size_t>(DrawID::k)] = draw.k;
+    currentDraw_[static_cast<size_t>(DrawID::r)] = draw.r;
+    currentDraw_[static_cast<size_t>(DrawID::alpha)] = draw.alpha;
+    currentDraw_[static_cast<size_t>(DrawID::theta)] = draw.theta;
+}
+
+void DrawCollector::save(const TrajectoryResult trajectoryResult) {
+    if (trajectoryResult == TrajectoryResult::CAPPED_AT_T_RUN || trajectoryResult == TrajectoryResult::ACCEPTED)
+        draws_.push_back(currentDraw_);
+}
+
+void DrawCollector::merge(const DataCollector& other) {
+    const auto& o = dynamic_cast<const DrawCollector&>(other);
+
+    draws_.reserve(draws_.size() + o.draws_.size());
+    draws_.insert(draws_.end(), o.draws_.begin(), o.draws_.end());
+}
+
+
+//ActiveSetSizeCollector
+ActiveSetSizeCollector::ActiveSetSizeCollector(const double collectionTime):
+    collectionTime_(collectionTime) {}
+
+void ActiveSetSizeCollector::merge(const DataCollector& other) {
+    const auto& o = dynamic_cast<const ActiveSetSizeCollector&>(other);
+
+    activeSetSizes_.reserve(activeSetSizes_.size() + o.activeSetSizes_.size());
+    activeSetSizes_.insert(activeSetSizes_.end(), o.activeSetSizes_.begin(), o.activeSetSizes_.end());
+}
+
+void ActiveSetSizeCollector::reset() {
+    currentActiveSetSize = 0;
+}
+
+void ActiveSetSizeCollector::registerTime(const double parentInfectionTime, const double newInfectionTime) {
+    if (parentInfectionTime <= collectionTime_ && collectionTime_ < newInfectionTime)
+        currentActiveSetSize += 1;
+}
+
+void ActiveSetSizeCollector::save(const TrajectoryResult trajectoryResult) {
+    if (trajectoryResult == TrajectoryResult::CAPPED_AT_T_RUN || trajectoryResult == TrajectoryResult::ACCEPTED)
+        activeSetSizes_.push_back(currentActiveSetSize);
+
+    reset();
+}
+
+
+//InfectionTimeCollector
+void InfectionTimeCollector::merge(const DataCollector& other) {
+    const auto& o = dynamic_cast<const InfectionTimeCollector&>(other);
+
+    allInfectionTimes_.reserve(allInfectionTimes_.size() + o.allInfectionTimes_.size());
+    allInfectionTimes_.insert(allInfectionTimes_.end(), o.allInfectionTimes_.begin(), o.allInfectionTimes_.end());
+}
+
+
+void InfectionTimeCollector::registerTime(double parentInfectionTime, const double newInfectionTime) {
+    currentInfectionTimes_.push_back(newInfectionTime);
+}
+
+void InfectionTimeCollector::reset() {
+    currentInfectionTimes_.clear();
+}
+
+void InfectionTimeCollector::save(TrajectoryResult trajectoryResult) {
+    allInfectionTimes_.push_back(currentInfectionTimes_);
+
+    reset();
+}
+
+
+
+
+
+
+
 
 
 

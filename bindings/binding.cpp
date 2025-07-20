@@ -185,6 +185,20 @@ PYBIND11_MODULE(_eventide, m) {
           )
           .def("histogram", &Hist2D::histogram, py::return_value_policy::reference_internal);
 
+     py::class_<DrawCollector, DataCollector>(m, "_DrawCollector")
+          .def(py::init<>())
+          .def("draws", &DrawCollector::draws, py::return_value_policy::reference_internal);
+
+     py::class_<ActiveSetSizeCollector, DataCollector>(m, "_ActiveSetSizeCollector")
+          .def(py::init<double>(), py::arg("collection_time"))
+          .def("active_set_sizes", &ActiveSetSizeCollector::activeSetSizes,
+               py::return_value_policy::reference_internal);
+
+
+     py::class_<InfectionTimeCollector, DataCollector>(m, "_InfectionTimeCollector")
+          .def(py::init<>())
+          .def("infection_times", &InfectionTimeCollector::infectionTimes, py::return_value_policy::reference_internal);
+
      // Simulator
      py::class_<PySimulator>(m, "Simulator")
           .def(py::init([](LatinHypercubeSampler& sampler,

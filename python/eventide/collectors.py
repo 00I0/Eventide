@@ -6,7 +6,8 @@ from typing import Tuple, Union
 
 import numpy as np
 
-from ._eventide import _Hist1D, _Hist2D, _Expr, _TimeMatrixCollector
+from ._eventide import _Hist1D, _Hist2D, _Expr, _TimeMatrixCollector, _DrawCollector, _ActiveSetSizeCollector, \
+    _InfectionTimeCollector
 
 
 class Collector(abc.ABC):
@@ -107,3 +108,61 @@ class TimeMatrix(Collector):
 
     def __repr__(self):
         return f'TimeMatrix({self.__cutoff_date})'
+
+
+class DrawCollector(Collector):
+    def __init__(self):
+        self.__collector = None
+
+    def numpy(self):
+        return np.asarray(self.__collector.draws())
+
+    def _get_cpp_collector(self, simulation_length: int, simulation_start_date: datetime):
+        if self.__collector: return self.__collector
+
+        self.__collector = _DrawCollector()
+        return self.__collector
+
+    def __repr__(self):
+        return f'DrawCollector()'
+
+
+class ActiveSetSizeCollector(Collector):
+    def __init__(self, collection_date: datetime):
+        self.__collector = None
+        self.__collection_date = collection_date
+
+    def numpy(self):
+        return np.asarray(self.__collector.active_set_sizes())
+
+    def _get_cpp_collector(self, simulation_length: int, simulation_start_date: datetime):
+        if self.__collector: return self.__collector
+
+        self.__collector = _ActiveSetSizeCollector(
+            (self.__collection_date - simulation_start_date).total_seconds() / (24 * 3600)
+        )
+        return self.__collector
+
+    @property
+    def collection_date(self):
+        return self.__collection_date
+
+    def __repr__(self):
+        return f'ActiveSetSizeCollector(collection_date = {self.collection_date})'
+
+
+class InfectionTimeCollector(Collector):
+    def __init__(self):
+        self.__collector = None
+
+    def numpy(self):
+        return self.__collector.infection_times()
+
+    def _get_cpp_collector(self, simulation_length: int, simulation_start_date: datetime):
+        if self.__collector: return self.__collector
+
+        self.__collector = _InfectionTimeCollector()
+        return self.__collector
+
+    def __repr__(self):
+        return 'InfectionTimeCollector'

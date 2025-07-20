@@ -107,7 +107,7 @@ TrajectoryResult Simulator::processTrajectory(const Draw& originalDraw, RngEngin
         criterionGroup.registerTime(newInfectionTime);
         if (criterionGroup.earlyReject()) return TrajectoryResult::REJECTED;
         heap.push(newInfectionTime);
-        collectorGroup.registerTime(newInfectionTime);
+        collectorGroup.registerTime(0, newInfectionTime);
         cases++;
     }
 
@@ -141,18 +141,18 @@ bool Simulator::simulateSegment(std::priority_queue<double, std::vector<double>,
                                 int& cases, const Draw& draw, RngEngine& rng, CriterionGroup& criterionGroup,
                                 DataCollectorGroup& collectorGroup, const double until) const {
     while (!heap.empty() && cases < maxCases_) {
-        const double infectionTime = heap.top();
-        if (infectionTime > until) break;
+        const double parentInfectionTime = heap.top();
+        if (parentInfectionTime > until) break;
 
         const int nInfections = rng.negBinomial(draw.k, draw.r * draw.R0);
         heap.pop();
 
         for (int i = 0; i < nInfections; i++) {
-            double newInfectionTime = rng.gamma(draw.alpha, draw.theta) + infectionTime;
+            double newInfectionTime = rng.gamma(draw.alpha, draw.theta) + parentInfectionTime;
             criterionGroup.registerTime(newInfectionTime);
             if (criterionGroup.earlyReject()) return false;
             heap.push(newInfectionTime);
-            collectorGroup.registerTime(newInfectionTime);
+            collectorGroup.registerTime(parentInfectionTime, newInfectionTime);
             cases++;
         }
     }

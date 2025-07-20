@@ -1,6 +1,7 @@
 #pragma once
 #include <random>
 #include <vector>
+#include <vector>
 #include "Parameter.h"
 #include "RngEngine.h"
 
@@ -43,13 +44,6 @@ namespace eventide {
         const bool scramble_;
 
         // Helper: generate a random permutation 0..n-1
-        std::vector<int> shuffledIndices(const int n) {
-            std::vector<int> idx(n);
-            for (int i = 0; i < n; ++i) idx[i] = i;
-            if (scramble_) {
-                std::shuffle(idx.begin(), idx.end(), std::mt19937(rng_.nextUInt32()));
-            }
-            return idx;
-        }
+        std::vector<int> shuffledIndices(int n);
     };
 }

@@ -13,6 +13,7 @@ class Parameters:
         if missing: raise ValueError(f"missing parameters: {missing}")
 
         self._params: Dict[str, _Param] = {k: _Param(k, *kw[k]) for k in self._ORDER}
+        self._ranges: Dict[str, Tuple[float, float]] = {k: kw[k] for k in self._ORDER}
         self._validators: List[str] = []
 
     def require(self, f: str) -> "Parameters":
@@ -34,3 +35,23 @@ class Parameters:
                 ', '.join(f'{k}={v.min}…{v.max}' for k, v in self._params.items()) +
                 f', validators={len(self._validators)})'
         )
+
+    @property
+    def R0_range(self):
+        return self._ranges['R0']
+
+    @property
+    def r_range(self):
+        return self._ranges['r']
+
+    @property
+    def k_range(self):
+        return self._ranges['k']
+
+    @property
+    def alpha_range(self):
+        return self._ranges['alpha']
+
+    @property
+    def theta_range(self):
+        return self._ranges['theta']

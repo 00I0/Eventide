@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # noinspection PyUnresolvedReferences
 from ._eventide import (
@@ -18,14 +18,14 @@ eventide – friendly Python facade for the C++ branching-process core.
 
 # ---- pure-python helpers -------------------------------------------------
 from .parameter import Parameters
-from .collectors import Hist1D, Hist2D, TimeMatrix, Collector
+from .collectors import Hist1D, Hist2D, TimeMatrix, Collector, ActiveSetSizeCollector, InfectionTimeCollector
 from .criterion import IntervalCriterion, IndexOffspringCriterion, Criterion
 from .scenario import Scenario, ParameterChangePoint
 
 __all__ = [
     "Parameter", "ParameterChangePoint", "Scenario",
     "IndexOffspringCriterion", "IntervalCriterion", "LatinHypercubeSampler",
-    "Parameters", "Hist1D", "Hist2D", "Simulator", "TimeMatrix"
+    "Parameters", "Hist1D", "Hist2D", "Simulator", "TimeMatrix", "ActiveSetSizeCollector", "InfectionTimeCollector"
 ]
 
 
@@ -62,3 +62,7 @@ class Simulator:
             self.max_cases,
             self.max_workers
         ).run()
+
+    @property
+    def end_date(self) -> datetime:
+        return self.start_date + timedelta(days=self.T_run)

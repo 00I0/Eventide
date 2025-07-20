@@ -8,7 +8,7 @@ include(FetchContent)
 FetchContent_Declare(
         exprtk
         GIT_REPOSITORY https://github.com/ArashPartow/exprtk.git
-        GIT_TAG master           # or pin to a release tag/commit
+        GIT_TAG f46bffcd6966d38a09023fb37ba9335214c9b959           # or pin to a release tag/commit
 )
 FetchContent_MakeAvailable(exprtk)
 

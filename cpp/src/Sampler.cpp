@@ -11,6 +11,15 @@ LatinHypercubeSampler::LatinHypercubeSampler(std::vector<Parameter> params, cons
 }
 
 
+std::vector<int> LatinHypercubeSampler::shuffledIndices(const int n) {
+    std::vector<int> idx(n);
+    for (int i = 0; i < n; ++i) idx[i] = i;
+    if (scramble_) {
+        std::shuffle(idx.begin(), idx.end(), std::mt19937(rng_.nextUInt32()));
+    }
+    return idx;
+}
+
 std::vector<Draw> LatinHypercubeSampler::sampleBlock(const int n) {
     const auto d = params_.size();
     if (d != 5) throw std::runtime_error("sampleBlock: expected exactly 5 parameters for Draw struct.");

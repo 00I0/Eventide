@@ -2,5 +2,23 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/boost_math-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/exprtk-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/libtcc-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/pybind11-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/tinycc-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/boost_math-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/exprtk-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/libtcc-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/pybind11-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/tinycc-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/tinycc/src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-relwithdebinfo-coverage/_deps/boost_math-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-relwithdebinfo-coverage/_deps/pybind11-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-relwithdebinfo/_deps/boost_math-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-relwithdebinfo/_deps/exprtk-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-relwithdebinfo/_deps/libtcc-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-relwithdebinfo/_deps/pybind11-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-relwithdebinfo/_deps/tinycc-src" vcs="Git" />
   </component>
 </project>
