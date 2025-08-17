@@ -1,57 +1,48 @@
+"""
+Parameter‐range helpers and Latin‐Hypercube sampler factory.
+"""
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+# noinspection PyUnresolvedReferences
+from ._eventide import Parameter as _Parameter
 
-from ._eventide import Parameter as _Param, LatinHypercubeSampler
 
+class Parameter:
+    """
+    Represents a parameter with a name, minimum value, and maximum value.
 
-class Parameters:
-    _ORDER = ("R0", "k", "r", "alpha", "theta")
+    This class provides a convenient interface for managing parameters with
+    defined bounds. It encapsulates functionality for retrieving the parameter's
+    name, minimum value, and maximum value.
 
-    def __init__(self, **kw: Tuple[float, float]):
-        missing = [n for n in self._ORDER if n not in kw]
-        if missing: raise ValueError(f"missing parameters: {missing}")
+    Args:
+        name: The name of the parameter must be one of 'R0', 'k', 'r', 'alpha', 'theta'.
+        min: The minimum value of the parameter.
+        max: The maximum value of the parameter.
+    """
 
-        self._params: Dict[str, _Param] = {k: _Param(k, *kw[k]) for k in self._ORDER}
-        self._ranges: Dict[str, Tuple[float, float]] = {k: kw[k] for k in self._ORDER}
-        self._validators: List[str] = []
-
-    def require(self, f: str) -> "Parameters":
-        self._validators.append(f)
-        return self
-
-    def create_latin_hypercube_sampler(self, *, scramble: bool = True) -> LatinHypercubeSampler:
-        return LatinHypercubeSampler(list(self._params.values()), scramble)
-
-    def validators(self):
-        return self._validators
-
-    def __iter__(self):
-        yield from self._params.values()
-
-    def __repr__(self):
-        return (
-                'Parameters(' +
-                ', '.join(f'{k}={v.min}…{v.max}' for k, v in self._params.items()) +
-                f', validators={len(self._validators)})'
-        )
+    # noinspection PyShadowingBuiltins
+    def __init__(self, name: str, min: float, max: float):
+        if name not in ('R0', 'k', 'r', 'alpha', 'theta'):
+            raise ValueError(f'name must be one of R0, k, r, alpha, theta, not {name}')
+        self._cpp_parameter = _Parameter(name, min, max)
 
     @property
-    def R0_range(self):
-        return self._ranges['R0']
+    def name(self) -> str:
+        """str: The name of the parameter."""
+        return self._cpp_parameter.name()
 
     @property
-    def r_range(self):
-        return self._ranges['r']
+    def min(self) -> float:
+        """float: The minimum value of the parameter."""
+        return self._cpp_parameter.min()
 
     @property
-    def k_range(self):
-        return self._ranges['k']
+    def max(self) -> float:
+        """float: The maximum value of the parameter."""
+        return self._cpp_parameter.max()
 
     @property
-    def alpha_range(self):
-        return self._ranges['alpha']
-
-    @property
-    def theta_range(self):
-        return self._ranges['theta']
+    def cpp_parameter(self):
+        """_Parameter: The underlying C++ Parameter object."""
+        return self._cpp_parameter

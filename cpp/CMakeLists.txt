@@ -14,7 +14,6 @@ FetchContent_MakeAvailable(exprtk)
 
 
 add_library(eventide_core
-        src/Parameter.cpp
         src/Sampler.cpp
         src/Scenario.cpp
         src/Criterion.cpp

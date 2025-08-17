@@ -12,11 +12,21 @@ namespace eventide {
     /**
      * @brief Orchestrates parameter sampling, parallel branching, criteria, and data collection.
      */
-
-
     class Simulator {
     public:
-        Simulator(const LatinHypercubeSampler& sampler,
+        /**
+         * @param samplerProto     Prototype sampler to fork into threads.
+         * @param scenario         Scenario model.
+         * @param criteria         Group of acceptance/rejection criteria.
+         * @param collectors       Group of data collectors.
+         * @param numTrajectories  Total trajectories to attempt.
+         * @param chunkSize        How many draws per batch.
+         * @param T_run            Simulation time horizon.
+         * @param maxCases         Max cases per trajectory.
+         * @param maxWorkers       Number of threads.
+         * @param paramValidator   Expression to filter invalid parameters.
+         */
+        Simulator(const Sampler& samplerProto,
                   const Scenario& scenario,
                   const CriterionGroup& criteria,
                   const DataCollectorGroup& collectors,
@@ -27,13 +37,15 @@ namespace eventide {
                   int maxWorkers,
                   const CompiledExpression& paramValidator);
 
+        /** @brief Run all simulations, merging results into `collectors()`. */
         void run();
 
+        /** @brief Access the merged collectors after `run()`. */
         const DataCollectorGroup& collectors() const { return collectors_; }
 
     private:
         // Configuration
-        const LatinHypercubeSampler sampler_;
+        const Sampler& samplerProto_;
         const Scenario scenario_;
         const CriterionGroup criteria_;
         DataCollectorGroup collectors_;
@@ -50,6 +62,6 @@ namespace eventide {
 
 
         void processChunk(int64_t chunkIndex, RngEngine& rng, CriterionGroup& criterionGroup,
-                          DataCollectorGroup& collectorGroup, Scenario& scenario, LatinHypercubeSampler& sampler) const;
+                          DataCollectorGroup& collectorGroup, Scenario& scenario, Sampler& sampler) const;
     };
 }

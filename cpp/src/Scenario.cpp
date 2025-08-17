@@ -5,11 +5,36 @@
 
 using namespace eventide;
 
+
+ParameterChangePoint::ParameterChangePoint(const double time_,
+                                           const DrawID which_,
+                                           const CompiledExpression& expression_)
+    : time(time_),
+      which(which_),
+      isRestore(false),
+      expression(std::make_shared<CompiledExpression>(expression_)) {}
+
+ParameterChangePoint::ParameterChangePoint(const double time_, const DrawID which_):
+    time(time_), which(which_), isRestore(true), expression(std::make_shared<CompiledExpression>("0.0")) {}
+
+
 Scenario::Scenario(std::vector<ParameterChangePoint> cps): cps_(std::move(cps)) {
     std::sort(cps_.begin(), cps_.end(), [](auto const& a, auto const& b) { return a.time < b.time; });
 }
 
-void Scenario::reset() { nextIdx_ = 0; }
+void Scenario::reset() noexcept {
+    nextIdx_ = 0;
+}
+
+double Scenario::nextTime(const double cap) const noexcept {
+    const double t = nextTime();
+    return t < cap ? t : cap;
+}
+
+
+double Scenario::nextTime() const noexcept {
+    return nextIdx_ < cps_.size() ? cps_[nextIdx_].time : DOUBLE_INF;
+}
 
 
 void Scenario::applyNext(Draw& current, const Draw& original) {
@@ -22,19 +47,18 @@ void Scenario::applyNext(Draw& current, const Draw& original) {
     const auto newValue = cp.expression->eval(current);
 
 
-    const
-        double val = isRestore
-                         ? [&] {
-                             switch (which) {
-                             case DrawID::R0: return original.R0;
-                             case DrawID::r: return original.r;
-                             case DrawID::k: return original.k;
-                             case DrawID::alpha: return original.alpha;
-                             case DrawID::theta: return original.theta;
-                             }
-                             throw std::runtime_error("Scenario::applyNext: unknown draw type");
-                         }()
-                         : newValue;
+    const double val = isRestore
+                           ? [&] {
+                               switch (which) {
+                               case DrawID::R0: return original.R0;
+                               case DrawID::r: return original.r;
+                               case DrawID::k: return original.k;
+                               case DrawID::alpha: return original.alpha;
+                               case DrawID::theta: return original.theta;
+                               }
+                               throw std::runtime_error("Scenario::applyNext: unknown draw type");
+                           }()
+                           : newValue;
 
     switch (which) {
     case DrawID::R0:

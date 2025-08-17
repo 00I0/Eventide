@@ -10,8 +10,8 @@ TimeMatrixCollector::TimeMatrixCollector(const int T, const int cutoffDay):
     assert(cutoffDay <= T);
 }
 
-TimeMatrixCollector::TimeMatrixCollector(const TimeMatrixCollector& o):
-    T_(o.T_), cutoffDay_(o.cutoffDay_), mat_(o.mat_), maxTime_(0), firstAfter_(o.T_ + 1) {}
+TimeMatrixCollector::TimeMatrixCollector(const TimeMatrixCollector& other):
+    T_(other.T_), cutoffDay_(other.cutoffDay_), mat_(other.mat_), maxTime_(0), firstAfter_(other.T_ + 1) {}
 
 void TimeMatrixCollector::registerTime(const double parentInfectionTime, const double newInfectionTime) {
     const int day = std::clamp(static_cast<int>(std::floor(newInfectionTime)), 0, T_ + 1);
@@ -99,8 +99,17 @@ void Hist2D::merge(const DataCollector& other) {
 
 
 //DataCollectorGroup
-DataCollectorGroup::DataCollectorGroup(std::vector<std::unique_ptr<DataCollector>> collectors):
-    collectors_(std::move(collectors)) {}
+DataCollectorGroup::DataCollectorGroup(const std::vector<std::unique_ptr<DataCollector>>& collectors) {
+    collectors_.reserve(collectors.size());
+    for (const auto& collector : collectors)
+        collectors_.emplace_back(collector->clone());
+}
+
+DataCollectorGroup::DataCollectorGroup(const std::vector<std::shared_ptr<DataCollector>>& collectors) {
+    collectors_.reserve(collectors.size());
+    for (const auto& collector : collectors)
+        collectors_.emplace_back(collector->clone());
+}
 
 DataCollectorGroup::DataCollectorGroup(const DataCollectorGroup& other) {
     collectors_.reserve(other.collectors_.size());
@@ -189,16 +198,3 @@ void InfectionTimeCollector::save(TrajectoryResult trajectoryResult) {
 
     reset();
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

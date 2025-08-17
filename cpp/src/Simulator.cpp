@@ -5,7 +5,7 @@
 
 using namespace eventide;
 
-Simulator::Simulator(const LatinHypercubeSampler& sampler,
+Simulator::Simulator(const Sampler& samplerProto,
                      const Scenario& scenario,
                      const CriterionGroup& criteria,
                      const DataCollectorGroup& collectors,
@@ -15,7 +15,7 @@ Simulator::Simulator(const LatinHypercubeSampler& sampler,
                      const int maxCases,
                      const int maxWorkers,
                      const CompiledExpression& paramValidator)
-    : sampler_(sampler),
+    : samplerProto_(samplerProto),
       scenario_(scenario),
       criteria_(criteria),
       collectors_(collectors),
@@ -33,36 +33,33 @@ void Simulator::run() {
     const int64_t nChunks = (numTrajectories_ + chunkSize_ - 1) / chunkSize_;
     std::atomic<int64_t> nextChunk{0};
 
+    std::vector<RngEngine> rngs(maxWorkers_);
+    for (int i = 0; i < maxWorkers_; ++i) rngs[i] = RngEngine(RngEngine::defaultSeed() + i);
+
+    auto samplers = samplerProto_.split(maxWorkers_, rngs);
+
     struct WorkerCtx {
-        DataCollectorGroup collectors;
-        CriterionGroup criteria;
-        Scenario scenario;
+        std::unique_ptr<Sampler> sampler;
         RngEngine rng;
-        LatinHypercubeSampler sampler;
+        CriterionGroup criteria;
+        DataCollectorGroup collectors;
+        Scenario scenario;
         std::thread thread;
-
-        WorkerCtx(const DataCollectorGroup& protoColl, const CriterionGroup& protoCrit, const Scenario& protoScen,
-                  const LatinHypercubeSampler& protoSampler, const int seed):
-            collectors(protoColl),
-            criteria(protoCrit),
-            scenario(protoScen),
-            rng(seed),
-            sampler(protoSampler, rng) {}
     };
-
     std::vector<WorkerCtx> workers;
     workers.reserve(maxWorkers_);
-    for (int i = 0; i < maxWorkers_; ++i)
-        workers.emplace_back(collectors_, criteria_, scenario_, sampler_, RngEngine::defaultSeed() + i);
 
-    for (int w = 0; w < maxWorkers_; ++w) {
-        WorkerCtx& wk = workers[w];
-        wk.thread = std::thread([&, nChunks] {
+
+    for (int i = 0; i < maxWorkers_; ++i) {
+        workers.push_back({
+            std::move(samplers[i]), rngs[i], criteria_, collectors_, scenario_, {}
+        });
+        auto& wk = workers.back();
+        wk.thread = std::thread([&wk, &nextChunk, nChunks, this] {
             while (true) {
-                const int64_t chunk = nextChunk.fetch_add(1, std::memory_order_relaxed);
-                if (chunk >= nChunks) break;
-
-                processChunk(chunk, wk.rng, wk.criteria, wk.collectors, wk.scenario, wk.sampler);
+                const int64_t chunkIdx = nextChunk.fetch_add(1, std::memory_order_relaxed);
+                if (chunkIdx >= nChunks || wk.sampler->hasFinished()) break;
+                processChunk(chunkIdx, wk.rng, wk.criteria, wk.collectors, wk.scenario, *wk.sampler);
             }
         });
     }
@@ -72,8 +69,7 @@ void Simulator::run() {
 }
 
 void Simulator::processChunk(const int64_t chunkIndex, RngEngine& rng, CriterionGroup& criterionGroup,
-                             DataCollectorGroup& collectorGroup, Scenario& scenario,
-                             LatinHypercubeSampler& sampler) const {
+                             DataCollectorGroup& collectorGroup, Scenario& scenario, Sampler& sampler) const {
     const int64_t remain = numTrajectories_ - chunkIndex * static_cast<int64_t>(chunkSize_);
     const int blockSz = std::min(static_cast<int64_t>(chunkSize_), remain);
     const auto block = sampler.sampleBlock(blockSz);
@@ -85,7 +81,8 @@ void Simulator::processChunk(const int64_t chunkIndex, RngEngine& rng, Criterion
         criterionGroup.reset();
         collectorGroup.reset();
         scenario.reset();
-        TrajectoryResult trajectoryResult = processTrajectory(draw, rng, criterionGroup, collectorGroup, scenario);
+        auto const trajectoryResult = processTrajectory(draw, rng, criterionGroup, collectorGroup, scenario);
+        sampler.reportResult(trajectoryResult);
         if (trajectoryResult != TrajectoryResult::REJECTED)
             collectorGroup.save(trajectoryResult);
     }
@@ -98,8 +95,9 @@ TrajectoryResult Simulator::processTrajectory(const Draw& originalDraw, RngEngin
 
     // process the root
     const int nRoot = rng.negBinomial(draw.k, draw.R0);
-    int cases = 0;
+    int cases = 1;
     if (!criterionGroup.checkRoot(nRoot)) return TrajectoryResult::REJECTED;
+    collectorGroup.registerTime(0, 0);
 
     std::priority_queue<double, std::vector<double>, std::greater<double>> heap;
     for (int i = 0; i < nRoot; i++) {
@@ -159,4 +157,3 @@ bool Simulator::simulateSegment(std::priority_queue<double, std::vector<double>,
 
     return true;
 }
-

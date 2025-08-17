@@ -15,8 +15,7 @@ using namespace eventide;
 
 static std::string to_lower(std::string s) {
      std::transform(s.begin(), s.end(), s.begin(),
-                    [](const unsigned char c) { return std::tolower(c); }
-     );
+                    [](const unsigned char c) { return std::tolower(c); });
      return s;
 }
 
@@ -34,47 +33,40 @@ static DrawID name_to_id(const std::string& name) {
 namespace eventide {
      struct PySimulator {
           std::unique_ptr<Simulator> core;
-          std::vector<DataCollector*> originals; // borrowed, Python-side
+          std::vector<std::shared_ptr<DataCollector>> originals; // borrowed, Python-side
 
-          PySimulator(std::unique_ptr<Simulator> core_, std::vector<DataCollector*> originals_):
-               core(std::move(core_)), originals(std::move(originals_)) {}
+          PySimulator(const std::shared_ptr<Sampler>& sampler,
+                      const std::shared_ptr<Scenario>& scenario,
+                      const std::vector<std::shared_ptr<Criterion>>& criteria,
+                      const std::vector<std::shared_ptr<DataCollector>>& collectors,
+                      CompiledExpression validator,
+                      int64_t numT,
+                      int chunk,
+                      int Tr,
+                      int maxC,
+                      int workers)
+               : originals(collectors) {
+               CriterionGroup critGroup(criteria);
+               DataCollectorGroup collGroup(originals);
+
+               core = std::make_unique<Simulator>(
+                    *sampler, *scenario,
+                    critGroup, collGroup,
+                    numT, chunk, Tr, maxC, workers,
+                    validator
+               );
+          }
 
           void run() const {
                core->run();
-               auto& clone_group = core->collectors(); // DataCollectorGroup
-               const size_t n_clones = clone_group.size();
-               const size_t n_orig = originals.size();
-
-               const size_t n = std::min(n_clones, n_orig);
+               auto& collectors = core->collectors(); // DataCollectorGroup
+               const size_t n = std::min(collectors.size(), originals.size());
                for (size_t i = 0; i < n; ++i)
-                    originals[i]->merge(*clone_group.at(i));
+                    originals[i]->merge(*collectors.at(i));
           }
      };
 }
 
-/* reorder user given Parameter objects into the fixed order
- * [R0, k, r, alpha, theta].  Accepts either a list or a dict. */
-static std::vector<Parameter> reorder_params(const py::object& seq) {
-     std::array<std::optional<Parameter>, 5> slot;
-
-     auto emplace = [&](const Parameter& p) {
-          slot[static_cast<int>(name_to_id(p.name))].emplace(p);
-     };
-
-     if (py::isinstance<py::dict>(seq)) {
-          for (auto [fst, snd] : seq.cast<py::dict>())
-               emplace(snd.cast<const Parameter&>());
-     }
-     else {
-          for (auto p_obj : seq)
-               emplace(p_obj.cast<const Parameter&>());
-     }
-     for (int i = 0; i < 5; ++i)
-          if (!slot[i]) throw py::value_error("missing parameter");
-
-     // build vector in final order by *construction*, not assignment
-     return {*slot[0], *slot[1], *slot[2], *slot[3], *slot[4]};
-}
 
 PYBIND11_MODULE(_eventide, m) {
      m.doc() = "Branching‐process simulator";
@@ -91,32 +83,42 @@ PYBIND11_MODULE(_eventide, m) {
           .def_readonly("max", &Parameter::max)
           .def("is_fixed", &Parameter::isFixed);
 
-     py::class_<CompiledExpression>(m, "_Expr")
+     py::class_<CompiledExpression>(m, "CompiledExpression")
           .def(py::init<std::string>());
 
-     // LatinHypercubeSampler
-     py::class_<LatinHypercubeSampler>(m, "LatinHypercubeSampler")
-          .def(py::init([](const py::object& params, bool scramble) {
-                    static std::vector<std::unique_ptr<RngEngine>> all_rngs; // keep alive
-                    all_rngs.emplace_back(std::make_unique<RngEngine>());
-                    RngEngine& rng = *all_rngs.back();
 
-                    std::vector<Parameter> v = reorder_params(params);
-                    return std::make_unique<LatinHypercubeSampler>(v, rng, scramble);
+     py::class_<Sampler, std::shared_ptr<Sampler>>(m, "Draw");
+
+     // LatinHypercubeSampler
+     py::class_<LatinHypercubeSampler, Sampler, std::shared_ptr<LatinHypercubeSampler>>(m, "LatinHypercubeSampler")
+          .def(py::init([](const std::vector<Parameter>& vec, bool scramble) {
+                    RngEngine rng;
+                    return std::make_shared<LatinHypercubeSampler>(vec, rng, scramble);
                }),
                py::arg("parameters"),
                py::arg("scramble") = true
-          )
-          .def("sample_block",
-               [](LatinHypercubeSampler& self, const int n) {
-                    return self.sampleBlock(n); // rng is stored internally
-               })
-          .def("parameters", [](const LatinHypercubeSampler& self) { return self.parameters(); });
+          );
+
+
+     py::class_<PreselectedSampler, Sampler, std::shared_ptr<PreselectedSampler>>(m, "PreselectedSampler")
+          .def(py::init([](const std::vector<std::array<double, 5>>& rawDraws, int maxTrials) {
+               std::vector<Draw> draws;
+               draws.reserve(rawDraws.size());
+               for (const auto& array : rawDraws)
+                    draws.emplace_back(Draw{
+                         array[static_cast<int>(DrawID::R0)],
+                         array[static_cast<int>(DrawID::k)],
+                         array[static_cast<int>(DrawID::r)],
+                         array[static_cast<int>(DrawID::alpha)],
+                         array[static_cast<int>(DrawID::theta)]
+                    });
+               return std::make_shared<PreselectedSampler>(draws, maxTrials);
+          }));
 
      // Scenario & ChangePoints
-     py::class_<ParameterChangePoint>(m, "ParameterChangePoint")
+     py::class_<ParameterChangePoint, std::shared_ptr<ParameterChangePoint>>(m, "ParameterChangePoint")
           .def(py::init([](const double time, const std::string& paramName, const CompiledExpression& expression) {
-                    return ParameterChangePoint(time, name_to_id(paramName), expression);
+                    return std::make_shared<ParameterChangePoint>(time, name_to_id(paramName), expression);
                }),
                py::arg("time"),
                py::arg("param"),
@@ -124,7 +126,7 @@ PYBIND11_MODULE(_eventide, m) {
                "At <time>, set <param> to <new_value>."
           )
           .def(py::init([](const double time, const std::string& paramName) {
-                    return ParameterChangePoint(time, name_to_id(paramName));
+                    return std::make_shared<ParameterChangePoint>(time, name_to_id(paramName));
                }),
                py::arg("time"),
                py::arg("param"),
@@ -132,21 +134,21 @@ PYBIND11_MODULE(_eventide, m) {
           );
 
 
-     py::class_<Scenario>(m, "Scenario")
+     py::class_<Scenario, std::shared_ptr<Scenario>>(m, "Scenario")
           .def(py::init<std::vector<ParameterChangePoint>>(),
                py::arg("change_points")
           );
 
      // Criterion base + subclasses
-     py::class_<Criterion, std::unique_ptr<Criterion>>(m, "Criterion");
+     py::class_<Criterion, std::shared_ptr<Criterion>>(m, "Criterion");
 
-     py::class_<OffspringCriterion, Criterion>(m, "OffspringCriterion")
+     py::class_<OffspringCriterion, Criterion, std::shared_ptr<OffspringCriterion>>(m, "OffspringCriterion")
           .def(py::init<int, int>(),
                py::arg("min_offspring"),
                py::arg("max_offspring")
           );
 
-     py::class_<IntervalCriterion, Criterion>(m, "IntervalCriterion")
+     py::class_<IntervalCriterion, Criterion, std::shared_ptr<IntervalCriterion>>(m, "IntervalCriterion")
           .def(py::init<double, double, int, int>(),
                py::arg("t_min"),
                py::arg("t_max"),
@@ -155,16 +157,16 @@ PYBIND11_MODULE(_eventide, m) {
           );
 
      // DataCollector base + subclasses
-     py::class_<DataCollector, std::unique_ptr<DataCollector>>(m, "DataCollector");
+     py::class_<DataCollector, std::shared_ptr<DataCollector>>(m, "DataCollector");
 
-     py::class_<TimeMatrixCollector, DataCollector>(m, "_TimeMatrixCollector")
+     py::class_<TimeMatrixCollector, DataCollector, std::shared_ptr<TimeMatrixCollector>>(m, "TimeMatrixCollector")
           .def(py::init<int, int>(),
                py::arg("T"),
                py::arg("cutoff_day")
           )
           .def("matrix", &TimeMatrixCollector::matrix, py::return_value_policy::reference_internal);
 
-     py::class_<Hist1D, DataCollector>(m, "_Hist1D")
+     py::class_<Hist1D, DataCollector, std::shared_ptr<Hist1D>>(m, "Hist1D")
           .def(py::init<CompiledExpression, int, double, double>(),
                py::arg("expr"),
                py::arg("bins"),
@@ -173,7 +175,7 @@ PYBIND11_MODULE(_eventide, m) {
           )
           .def("histogram", &Hist1D::histogram, py::return_value_policy::reference_internal);
 
-     py::class_<Hist2D, DataCollector>(m, "_Hist2D")
+     py::class_<Hist2D, DataCollector, std::shared_ptr<Hist2D>>(m, "Hist2D")
           .def(py::init<CompiledExpression, CompiledExpression, int, double, double, double, double>(),
                py::arg("expr_x"),
                py::arg("expr_y"),
@@ -185,47 +187,32 @@ PYBIND11_MODULE(_eventide, m) {
           )
           .def("histogram", &Hist2D::histogram, py::return_value_policy::reference_internal);
 
-     py::class_<DrawCollector, DataCollector>(m, "_DrawCollector")
+     py::class_<DrawCollector, DataCollector, std::shared_ptr<DrawCollector>>(m, "DrawCollector")
           .def(py::init<>())
           .def("draws", &DrawCollector::draws, py::return_value_policy::reference_internal);
 
-     py::class_<ActiveSetSizeCollector, DataCollector>(m, "_ActiveSetSizeCollector")
+     py::class_<ActiveSetSizeCollector, DataCollector, std::shared_ptr<ActiveSetSizeCollector>>(
+               m, "ActiveSetSizeCollector")
           .def(py::init<double>(), py::arg("collection_time"))
           .def("active_set_sizes", &ActiveSetSizeCollector::activeSetSizes,
                py::return_value_policy::reference_internal);
 
 
-     py::class_<InfectionTimeCollector, DataCollector>(m, "_InfectionTimeCollector")
+     py::class_<InfectionTimeCollector, DataCollector, std::shared_ptr<InfectionTimeCollector>>(
+               m, "InfectionTimeCollector")
           .def(py::init<>())
           .def("infection_times", &InfectionTimeCollector::infectionTimes, py::return_value_policy::reference_internal);
 
      // Simulator
-     py::class_<PySimulator>(m, "Simulator")
-          .def(py::init([](LatinHypercubeSampler& sampler,
-                           Scenario& scenario,
-                           const std::vector<Criterion*>& pyCrit,
-                           const std::vector<DataCollector*>& pyColl,
-                           const CompiledExpression& validator,
-                           int64_t numT, int chunk, int Tr, int maxC,
-                           int workers) {
-                    std::vector<std::unique_ptr<Criterion>> critCopies;
-                    for (const auto* c : pyCrit) critCopies.emplace_back(c->clone());
-                    CriterionGroup critGroup(std::move(critCopies));
-
-                    std::vector<std::unique_ptr<DataCollector>> collCopies;
-                    for (const auto* c : pyColl) collCopies.emplace_back(c->clone());
-                    DataCollectorGroup collGroup(std::move(collCopies));
-
-
-                    auto core = std::make_unique<Simulator>(
-                         sampler, scenario,
-                         critGroup, collGroup,
-                         numT, chunk, Tr, maxC,
-                         workers, validator);
-
-
-                    return PySimulator(std::move(core), pyColl);
-               }),
+     py::class_<PySimulator, std::shared_ptr<PySimulator>>(m, "PySimulator")
+          .def(py::init<
+                    std::shared_ptr<Sampler>,
+                    std::shared_ptr<Scenario>,
+                    std::vector<std::shared_ptr<Criterion>>,
+                    std::vector<std::shared_ptr<DataCollector>>,
+                    CompiledExpression,
+                    int64_t, int, int, int, int // numT, chunk, Tr, maxC, workers
+               >(),
                py::arg("sampler"),
                py::arg("scenario"),
                py::arg("criteria"),
@@ -235,6 +222,13 @@ PYBIND11_MODULE(_eventide, m) {
                py::arg("chunk_size"),
                py::arg("T_run"),
                py::arg("max_cases"),
-               py::arg("max_workers"))
+               py::arg("max_workers"),
+
+               // keep the Python‐side objects alive as long as this PySimulator lives:
+               py::keep_alive<1, 2>(), // sampler
+               py::keep_alive<1, 3>(), // scenario
+               py::keep_alive<1, 4>(), // criteria list
+               py::keep_alive<1, 5>() //  collectors' list
+          )
           .def("run", &PySimulator::run);
 }

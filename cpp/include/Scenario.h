@@ -1,5 +1,8 @@
 #pragma once
-#include <iostream>
+/**
+ * @file Scenario.h
+ * @brief Time‑based changes to parameter values during a trajectory.
+ */
 #include <vector>
 
 #include "CompiledExpression.h"
@@ -8,53 +11,57 @@
 
 namespace eventide {
     /**
-     * @brief At time `t`, either set one of the 5 parameters to `newValue`,
-     *        or restore it to the *original* drawn value.
+     * @brief At time t, change or restore one parameter.
      */
     struct ParameterChangePoint {
-        double time;
-        DrawID which;
-        bool isRestore;
-        std::shared_ptr<CompiledExpression> expression;
+        double time; /**< when (days since start) */
+        DrawID which; /**< which parameter to change */
+        bool isRestore; /**< true => restores the original draw */
+        std::shared_ptr<CompiledExpression> expression; /**< new‐value expression (nullptr => restore) */
 
-        ParameterChangePoint(const double time_, const DrawID which_, const CompiledExpression& expression_)
-            : time(time_), which(which_), isRestore(false),
-              expression(std::make_shared<CompiledExpression>(expression_)) {}
+        /**
+         * @brief Change to expression at time.
+         * @param time_         days since start
+         * @param which_        which DrawID
+         * @param expression_   new expression
+         */
+        ParameterChangePoint(double time_, DrawID which_, const CompiledExpression& expression_);
 
-        /** ctor for “restore to original” */
-        ParameterChangePoint(const double time_, const DrawID which_)
-            : time(time_), which(which_), isRestore(true), expression(std::make_shared<CompiledExpression>("0.0")) {}
+        /**
+         * @brief Restore original draw at time.
+         * @param time_      days since start
+         * @param which_     which DrawID
+         */
+        ParameterChangePoint(double time_, DrawID which_);
     };
 
     /**
-     * @brief Holds sorted ParameterChangePoints; can apply them in chronological order.
+     * @brief Applies a sequence of ParameterChangePoints in time order.
      */
     class Scenario {
     public:
         explicit Scenario(std::vector<ParameterChangePoint> cps);
+        Scenario(const Scenario& scenario) = default;
 
-        Scenario(const Scenario& scenario): cps_(scenario.cps_) {}
+        /** @brief Reset to start of timeline. */
+        void reset() noexcept;
 
-        /// Reset to before any changes are applied.
-        void reset();
-
-        double nextTime(const double cap) const noexcept {
-            const double t = nextTime();
-            return t < cap ? t : cap;
-        }
-
-        double nextTime() const noexcept {
-            return nextIdx_ < cps_.size() ? cps_[nextIdx_].time : DOUBLE_INF;
-        }
-
-        /// Apply the next change to the `current` map of parameter values.
         /**
-         * @brief Mutate `current[param]`:
-         *        • if isRestore:  current[param] = original[param]
-         *        • else:          current[param] = cp.newValue
-         *
-         * @param current   Map of current parameter values
-         * @param original  Map of the very first, base-draw values
+         * @brief Get next change time, capped at infinity.
+         * @param cap maximum time
+         * @return    next change ≤ cap or inf
+         */
+        double nextTime(double cap) const noexcept;
+
+
+        /** @brief Get the next change time (no cap). */
+        double nextTime() const noexcept;
+
+
+        /**
+         * @brief Apply the next change to the current parameter set.
+         * @param current   mutable draw to update
+         * @param original  the original draw values
          */
         void applyNext(Draw& current, const Draw& original);
 

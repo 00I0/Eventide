@@ -31,7 +31,6 @@ struct CompiledExpression::Impl {
 CompiledExpression::CompiledExpression(const std::string& expr):
     expr_(expr), impl_(std::make_shared<Impl>(std::move(expr))) {}
 
-CompiledExpression::~CompiledExpression() = default;
 
 double CompiledExpression::eval(const Draw& d) const {
     auto& impl = *impl_;
