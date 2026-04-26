@@ -29,8 +29,23 @@ struct CompiledExpression::Impl {
 };
 
 CompiledExpression::CompiledExpression(const std::string& expr):
-    expr_(expr), impl_(std::make_shared<Impl>(std::move(expr))) {}
+    expr_(expr), impl_(std::make_unique<Impl>(expr_)) {}
 
+CompiledExpression::CompiledExpression(const CompiledExpression& other):
+    expr_(other.expr_), impl_(std::make_unique<Impl>(expr_)) {}
+
+CompiledExpression::CompiledExpression(CompiledExpression&&) noexcept = default;
+
+CompiledExpression& CompiledExpression::operator=(const CompiledExpression& other) {
+    if (this == &other) return *this;
+    expr_ = other.expr_;
+    impl_ = std::make_unique<Impl>(expr_);
+    return *this;
+}
+
+CompiledExpression& CompiledExpression::operator=(CompiledExpression&&) noexcept = default;
+
+CompiledExpression::~CompiledExpression() = default;
 
 double CompiledExpression::eval(const Draw& d) const {
     auto& impl = *impl_;
@@ -42,4 +57,3 @@ double CompiledExpression::eval(const Draw& d) const {
 
     return impl.expression.value();
 }
-

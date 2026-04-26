@@ -13,15 +13,30 @@
 
 using namespace eventide;
 
-int main() {
+template <typename T>
+static double quantile(std::vector<T> v, double q) {
+    if (v.empty()) return std::numeric_limits<double>::quiet_NaN();
+    std::sort(v.begin(), v.end());
+    const double pos = q * (v.size() - 1);
+    const size_t i = static_cast<size_t>(std::floor(pos));
+    const double frac = pos - i;
+    if (i + 1 < v.size()) return v[i] * (1.0 - frac) + v[i + 1] * frac;
+    return static_cast<double>(v[i]);
+}
+
+double run_simulator() {
     // --- 1) Define parameters ---
-    std::vector<Parameter> params = {
+    std::vector params = {
         Parameter("R0", 0.25, 15),
         Parameter("r", 0.01, 0.99),
         Parameter("k", 0.2, 10),
         Parameter("alpha", 0.01, 20),
         Parameter("theta", 0.01, 20)
     };
+
+    CompiledExpression validator("(R0 * r < 3) and (3 < alpha * theta) and (alpha * theta < 20) "
+        "and (1/sqrt(alpha) >= 0.1) and (1/sqrt(alpha) <= 0.9) and (1 <= sqrt(alpha) * theta)"
+        "and (sqrt(alpha) * theta <= 15)");
 
     RngEngine rng;
     LatinHypercubeSampler sampler(params, rng, true);
@@ -40,77 +55,68 @@ int main() {
 
     // --- 4) Data collectors ---
     int T_run = 60;
-    int cut_off_day = 45;
     int N_TRAJ = 10'000'000;
+    int minReq = 2000;
 
-    auto tm_col = std::make_unique<TimeMatrixCollector>(T_run, cut_off_day);
-    auto ph_col = std::make_unique<DrawHistogramCollector>(params, 200);
-    auto jh_col = std::make_unique<JointHeatmapCollector>(0.25, 15.0, 0.01, 0.99, 50);
-    auto dm1_col = std::make_unique<DerivedMarginalCollector>(DerivedMarginalCollector::Product::R0_r, 0.0, 10.0, 200);
-    auto dm2_col = std::make_unique<DerivedMarginalCollector>(DerivedMarginalCollector::Product::AlphaTheta, 1.0, 50.0,
-                                                              200);
+    auto tm_col = std::make_shared<InfectionTimeCollector>();
 
-    std::vector<std::unique_ptr<DataCollector>> collectors;
-    collectors.push_back(std::move(tm_col));
-    collectors.push_back(std::move(ph_col));
-    collectors.push_back(std::move(jh_col));
-    collectors.push_back(std::move(dm1_col));
-    collectors.push_back(std::move(dm2_col));
-
+    std::vector<std::shared_ptr<DataCollector>> collectors;
+    collectors.push_back(tm_col);
     DataCollectorGroup collGroup(std::move(collectors));
 
     // --- 5) Run simulation ---
-    int chunk_size = 1'000'000;
+    int chunk_size = 100'000;
     int max_cases = 1000;
-    int max_workers = 1; // For profiling, single-thread is best
+    int max_workers = 13;
     auto start = std::chrono::high_resolution_clock::now();
 
-    Simulator sim(sampler, scenario, critGroup, collGroup,
-                  N_TRAJ, chunk_size, T_run, max_cases, max_workers, cut_off_day);
+    Simulator sim(sampler, scenario, critGroup, collGroup, N_TRAJ, minReq, chunk_size,
+                  T_run, max_cases, max_workers, validator);
     sim.run();
 
     auto stop = std::chrono::high_resolution_clock::now();
     auto runtime = std::chrono::duration<double>(stop - start).count();
-    std::cout << "Runtime: " << runtime << " seconds" << std::endl;
 
-    // --- 6) Retrieve results ---
-    // Use .get() to access pointers in the DataCollectorGroup (if your API exposes them, or cast from collGroup if needed)
-    // Example:
-    return 0;
-    // const auto
-    //     * time_matrix_col = dynamic_cast<TimeMatrixCollector*>(collGroup.collectors()[0].get());
-    // const auto* param_hist_col = dynamic_cast<DrawHistogramCollector*>(collGroup.collectors()[1].get());
-    // const auto* jh_col_ptr = dynamic_cast<JointHeatmapCollector*>(collGroup.collectors()[2].get());
-    // const auto* dm1_col_ptr = dynamic_cast<DerivedMarginalCollector*>(collGroup.collectors()[3].get());
-    // const auto* dm2_col_ptr = dynamic_cast<DerivedMarginalCollector*>(collGroup.collectors()[4].get());
-    //
-    // // Print or dump the main summary:
-    // size_t accepted = 0;
-    // if (time_matrix_col) {
-    //     const auto& mat = time_matrix_col->matrix();
-    //     for (const auto& row : mat)
-    //         for (int v : row)
-    //             accepted += v;
-    // }
-    // std::cout << "Trajectories accepted: " << accepted << " / " << N_TRAJ << std::endl;
-    // if (accepted == 0)
-    //     std::cout << "⚠️  All collectors are zero. Try relaxing or removing your acceptance criteria." << std::endl;
-    //
-    // // You can write out data to file for later inspection (CSV or NPY, if you wish)
-    // // Example: write time_matrix to CSV
-    // if (time_matrix_col) {
-    //     std::ofstream out("time_matrix.csv");
-    //     const auto& mat = time_matrix_col->matrix();
-    //     for (const auto& row : mat) {
-    //         for (size_t i = 0; i < row.size(); ++i) {
-    //             out << row[i];
-    //             if (i + 1 != row.size()) out << ",";
-    //         }
-    //         out << "\n";
-    //     }
-    // }
-    //
-    // Likewise for param_hist_col, etc.
+    std::cout << "  |  Runtime: " << std::fixed << std::setprecision(4) << runtime << " seconds ";
+    int accepted = static_cast<InfectionTimeCollector*>(sim.collectors().at(0).get())->infectionTimes().size();
+    collGroup.at(0)->recordDraw({0, 0, 0, 0, 0});
+    std::cout << " |  Trajectories accepted: " << accepted << " / " << N_TRAJ << std::endl;
+
+    return runtime;
+}
+
+int main() {
+    constexpr int REPEATS = 1000;
+    std::vector<double> runtimes;
+    for (int i = 0; i < REPEATS; ++i) {
+        std::cout << "\t" << i << "\t";
+        runtimes.push_back(run_simulator());
+    }
+
+
+    const double mean = std::accumulate(runtimes.begin(), runtimes.end(), 0.0) / runtimes.size();
+
+    double var = 0.0;
+    if (runtimes.size() > 1) {
+        for (const double x : runtimes) var += (x - mean) * (x - mean);
+        var /= runtimes.size() - 1;
+    }
+    const double sd = std::sqrt(var);
+
+    std::vector<double> copy_rt = runtimes;
+    const double p50 = quantile(copy_rt, 0.50);
+    const double p95 = quantile(copy_rt, 0.95);
+    const double minv = *std::min_element(copy_rt.begin(), copy_rt.end());
+    const double maxv = *std::max_element(copy_rt.begin(), copy_rt.end());
+
+
+    std::cout << "\n=== Runtime stats over " << REPEATS << " runs ===\n"
+        << "min   : " << std::fixed << std::setprecision(4) << minv << " s\n"
+        << "median: " << p50 << " s\n"
+        << "p95   : " << p95 << " s\n"
+        << "max   : " << maxv << " s\n"
+        << "mean  : " << mean << " s  (sd = " << sd << " s)\n";
+
 
     return 0;
 }

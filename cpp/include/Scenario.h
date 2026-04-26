@@ -17,7 +17,7 @@ namespace eventide {
         double time; /**< when (days since start) */
         DrawID which; /**< which parameter to change */
         bool isRestore; /**< true => restores the original draw */
-        std::shared_ptr<CompiledExpression> expression; /**< new‐value expression (nullptr => restore) */
+        CompiledExpression expression; /**< new‐value expression (ignored if restore) */
 
         /**
          * @brief Change to expression at time.

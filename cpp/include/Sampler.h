@@ -42,9 +42,9 @@ namespace eventide {
         /**
          * @brief Draw up to n samples in one batch.
          * @param n  Number of samples requested.
-         * @return   A vector of Draw (possibly fewer than n if exhausted).
+         * @param out Buffer to sample Draws into, must be at least n long.
          */
-        virtual std::vector<Draw> sampleBlock(int n) = 0;
+        virtual void sampleBlockInto(int n, std::vector<Draw>& out) = 0;
 
         /**
          * @brief Inform the sampler whether the last draw was accepted.
@@ -86,7 +86,7 @@ namespace eventide {
 
         std::vector<std::unique_ptr<Sampler>> split(int numThreads, const std::vector<RngEngine>& seeds) const override;
 
-        std::vector<Draw> sampleBlock(int n) override;
+        void sampleBlockInto(int n, std::vector<Draw>& out) override;
 
         void reportResult(TrajectoryResult) override {}
 
@@ -96,6 +96,7 @@ namespace eventide {
         std::vector<Parameter> params_;
         RngEngine rng_;
         const bool scramble_;
+
 
         /**
          * @brief Generate a random permutation of 0…n-1.
@@ -129,7 +130,7 @@ namespace eventide {
                            size_t segEnd);
 
         std::vector<std::unique_ptr<Sampler>> split(int numThreads, const std::vector<RngEngine>& seeds) const override;
-        std::vector<Draw> sampleBlock(int n) override;
+        void sampleBlockInto(int n, std::vector<Draw>& out) override;
         void reportResult(TrajectoryResult result) override;
         bool hasFinished() const override;
 

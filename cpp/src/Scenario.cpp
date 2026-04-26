@@ -12,10 +12,10 @@ ParameterChangePoint::ParameterChangePoint(const double time_,
     : time(time_),
       which(which_),
       isRestore(false),
-      expression(std::make_shared<CompiledExpression>(expression_)) {}
+      expression(expression_) {}
 
 ParameterChangePoint::ParameterChangePoint(const double time_, const DrawID which_):
-    time(time_), which(which_), isRestore(true), expression(std::make_shared<CompiledExpression>("0.0")) {}
+    time(time_), which(which_), isRestore(true), expression("0.0") {}
 
 
 Scenario::Scenario(std::vector<ParameterChangePoint> cps): cps_(std::move(cps)) {
@@ -44,7 +44,7 @@ void Scenario::applyNext(Draw& current, const Draw& original) {
     const auto& cp = cps_[nextIdx_];
     const auto which = cp.which;
     const auto isRestore = cp.isRestore;
-    const auto newValue = cp.expression->eval(current);
+    const auto newValue = cp.expression.eval(current);
 
 
     const double val = isRestore

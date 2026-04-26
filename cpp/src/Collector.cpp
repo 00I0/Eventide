@@ -5,12 +5,12 @@
 using namespace eventide;
 
 // TimeMatrixCollector
-TimeMatrixCollector::TimeMatrixCollector(const int T, const int cutoffDay):
+TimeMatrixCollector::TimeMatrixCollector(const int T, const int cutoffDay) :
     T_(T), cutoffDay_(cutoffDay), mat_(T + 2, std::vector<long>(T + 2, 0)), maxTime_(0), firstAfter_(T + 1) {
     assert(cutoffDay <= T);
 }
 
-TimeMatrixCollector::TimeMatrixCollector(const TimeMatrixCollector& other):
+TimeMatrixCollector::TimeMatrixCollector(const TimeMatrixCollector& other) :
     T_(other.T_), cutoffDay_(other.cutoffDay_), mat_(other.mat_), maxTime_(0), firstAfter_(other.T_ + 1) {}
 
 void TimeMatrixCollector::registerTime(const double parentInfectionTime, const double newInfectionTime) {
@@ -39,12 +39,12 @@ void TimeMatrixCollector::save(const TrajectoryResult trajectoryResult) {
 }
 
 //Hist1D
-Hist1D::Hist1D(const CompiledExpression& expression, const int bins, const double lo, const double hi):
+Hist1D::Hist1D(const CompiledExpression& expression, const int bins, const double lo, const double hi) :
     expression_(expression), bins_(bins), lo_(lo), hi_(hi), hist_(bins, 0), val_(0.0) {}
 
 
-Hist1D::Hist1D(const Hist1D& other): expression_(other.expression_), bins_(other.bins_), lo_(other.lo_),
-                                     hi_(other.hi_), hist_(other.hist_), val_(0.0) {}
+Hist1D::Hist1D(const Hist1D& other) : expression_(other.expression_), bins_(other.bins_), lo_(other.lo_),
+                                      hi_(other.hi_), hist_(other.hist_), val_(0.0) {}
 
 void Hist1D::recordDraw(const Draw& draw) {
     val_ = expression_.eval(draw);
@@ -68,13 +68,13 @@ void Hist1D::merge(const DataCollector& other) {
 
 //Hist2D
 Hist2D::Hist2D(const CompiledExpression& expressionX, const CompiledExpression& expressionY,
-               const int bins, const double loX, const double hiX, const double loY, const double hiY):
+               const int bins, const double loX, const double hiX, const double loY, const double hiY) :
     expressionX_(expressionX), expressionY_(expressionY), bins_(bins), loX_(loX), hiX_(hiX), loY_(loY), hiY_(hiY),
     hist_(bins, std::vector<long>(bins, 0)), valX_(0.0), valY_(0.0) {}
 
-Hist2D::Hist2D(const Hist2D& other): expressionX_(other.expressionX_), expressionY_(other.expressionY_),
-                                     bins_(other.bins_), loX_(other.loX_), hiX_(other.hiX_), loY_(other.loY_),
-                                     hiY_(other.hiY_), hist_(other.hist_), valX_(0.0), valY_(0.0) {}
+Hist2D::Hist2D(const Hist2D& other) : expressionX_(other.expressionX_), expressionY_(other.expressionY_),
+                                      bins_(other.bins_), loX_(other.loX_), hiX_(other.hiX_), loY_(other.loY_),
+                                      hiY_(other.hiY_), hist_(other.hist_), valX_(0.0), valY_(0.0) {}
 
 void Hist2D::recordDraw(const Draw& draw) {
     valX_ = expressionX_.eval(draw);
@@ -136,8 +136,8 @@ void DrawCollector::recordDraw(const Draw& draw) {
 }
 
 void DrawCollector::save(const TrajectoryResult trajectoryResult) {
-    if (trajectoryResult == TrajectoryResult::CAPPED_AT_T_RUN || trajectoryResult == TrajectoryResult::ACCEPTED)
-        draws_.push_back(currentDraw_);
+    // if (trajectoryResult == TrajectoryResult::CAPPED_AT_T_RUN || trajectoryResult == TrajectoryResult::ACCEPTED)
+    draws_.push_back(currentDraw_);
 }
 
 void DrawCollector::merge(const DataCollector& other) {
@@ -149,28 +149,31 @@ void DrawCollector::merge(const DataCollector& other) {
 
 
 //ActiveSetSizeCollector
-ActiveSetSizeCollector::ActiveSetSizeCollector(const double collectionTime):
+ActiveSetSizeCollector::ActiveSetSizeCollector(const double collectionTime) :
     collectionTime_(collectionTime) {}
 
 void ActiveSetSizeCollector::merge(const DataCollector& other) {
     const auto& o = dynamic_cast<const ActiveSetSizeCollector&>(other);
 
-    activeSetSizes_.reserve(activeSetSizes_.size() + o.activeSetSizes_.size());
-    activeSetSizes_.insert(activeSetSizes_.end(), o.activeSetSizes_.begin(), o.activeSetSizes_.end());
+    activeSets_.reserve(activeSets_.size() + o.activeSets_.size());
+    activeSets_.insert(activeSets_.end(), o.activeSets_.begin(), o.activeSets_.end());
 }
 
 void ActiveSetSizeCollector::reset() {
-    currentActiveSetSize = 0;
+    currentActiveSet_.clear();
 }
 
 void ActiveSetSizeCollector::registerTime(const double parentInfectionTime, const double newInfectionTime) {
-    if (parentInfectionTime <= collectionTime_ && collectionTime_ < newInfectionTime)
-        currentActiveSetSize += 1;
+    // if (parentInfectionTime <= collectionTime_ && collectionTime_ < newInfectionTime)
+    // currentActiveSet_.push_back(parentInfectionTime);
+
+    if (parentInfectionTime <= collectionTime_)
+        currentActiveSet_.push_back({parentInfectionTime, newInfectionTime});
 }
 
 void ActiveSetSizeCollector::save(const TrajectoryResult trajectoryResult) {
-    if (trajectoryResult == TrajectoryResult::CAPPED_AT_T_RUN || trajectoryResult == TrajectoryResult::ACCEPTED)
-        activeSetSizes_.push_back(currentActiveSetSize);
+    // if (trajectoryResult == TrajectoryResult::CAPPED_AT_T_RUN || trajectoryResult == TrajectoryResult::ACCEPTED)
+    activeSets_.push_back(currentActiveSet_);
 
     reset();
 }

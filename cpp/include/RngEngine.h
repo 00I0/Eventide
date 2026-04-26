@@ -16,6 +16,11 @@ namespace eventide {
          */
         explicit RngEngine(uint64_t seed = defaultSeed());
 
+        /**
+         * @param seed New seed for reseeding
+         */
+        void setSeed(uint64_t seed);
+
         /** @return a double ∈ [0,1) */
         double uniform();
 

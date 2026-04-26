@@ -4,6 +4,7 @@
  * @brief An arithmetic expression evaluator.
  */
 #include <string>
+#include <memory>
 #include "Sampler.h"   // for eventide::Draw
 
 namespace eventide {
@@ -18,8 +19,12 @@ namespace eventide {
          */
         explicit CompiledExpression(const std::string& expr);
 
+        CompiledExpression(const CompiledExpression& other);
+        CompiledExpression& operator=(const CompiledExpression& other);
+        CompiledExpression(CompiledExpression&&) noexcept;
+        CompiledExpression& operator=(CompiledExpression&&) noexcept;
 
-        ~CompiledExpression() = default;
+        ~CompiledExpression();
 
         /**
          * @brief Evaluate on one Draw.
@@ -32,8 +37,8 @@ namespace eventide {
         std::string expr() const { return expr_; }
 
     private:
-        const std::string expr_;
+        std::string expr_;
         struct Impl;
-        std::shared_ptr<Impl> impl_;
+        std::unique_ptr<Impl> impl_;
     };
 }

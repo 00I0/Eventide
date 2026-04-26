@@ -3,6 +3,7 @@
  * @file Collector.h
  * @brief Interfaces and implementations for collecting simulation data.
  */
+#include <map>
 #include <vector>
 
 #include "CompiledExpression.h"
@@ -239,12 +240,12 @@ namespace eventide {
          * @brief Access collected active set sizes.
          * @return vector of active set sizes at collection time points
          */
-        std::vector<double> activeSetSizes() const noexcept { return activeSetSizes_; }
+        std::vector<std::vector<std::pair<double, double>>> activeSetSizes() const noexcept { return activeSets_; }
 
     private:
-        int currentActiveSetSize = 0;
+        std::vector<std::pair<double, double>> currentActiveSet_;
         double collectionTime_;
-        std::vector<double> activeSetSizes_;
+        std::vector<std::vector<std::pair<double, double>>> activeSets_;
     };
 
 

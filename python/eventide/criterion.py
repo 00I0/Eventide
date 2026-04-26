@@ -71,6 +71,9 @@ class IntervalCriterion(Criterion):
         self.__min_cases = min_cases
         self.__max_cases = max_cases
 
+    def __repr__(self):
+        return f'IntervalCriterion(start_date={self.__start_date}, end_date={self.__end_date}, min_cases={self.__min_cases}, max_cases={self.__max_cases})'
+
     def _get_cpp_criterion(self, simulation_start_date: datetime):
         """
         Convert to C++ IntervalCriterion.
@@ -84,3 +87,19 @@ class IntervalCriterion(Criterion):
             self.__min_cases,
             self.__max_cases
         )
+
+    @property
+    def start_date(self):
+        return self.__start_date
+
+    @property
+    def end_date(self):
+        return self.__end_date
+
+    @property
+    def min_cases(self):
+        return self.__min_cases
+
+    @property
+    def max_cases(self):
+        return self.__max_cases

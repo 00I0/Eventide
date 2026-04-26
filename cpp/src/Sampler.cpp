@@ -30,15 +30,16 @@ LatinHypercubeSampler::LatinHypercubeSampler(const std::vector<Parameter>& param
 
 
     std::array<std::optional<Parameter>, D> slot{};
-
-    // Populate slots
     for (auto const& p : params) {
         const size_t idx = static_cast<size_t>(nameToDrawID(p.name));
+        if (slot[idx])
+            throw std::invalid_argument("LatinHypercubeSampler: duplicate parameter for slot " + std::to_string(idx));
         if (slot[idx])
             throw std::invalid_argument("LatinHypercubeSampler: duplicate parameter for slot " + std::to_string(idx));
 
         slot[idx].emplace(p);
     }
+
 
     params_.reserve(D);
     for (size_t i = 0; i < D; ++i) {
@@ -69,15 +70,18 @@ std::vector<int> LatinHypercubeSampler::shuffledIndices(const int n) {
     return idx;
 }
 
-std::vector<Draw> LatinHypercubeSampler::sampleBlock(const int n) {
+void LatinHypercubeSampler::sampleBlockInto(const int n, std::vector<Draw>& out) {
+    if (n <= 0) {
+        out.clear();
+        return;
+    }
+    if (out.size() != n) out.resize(n);
+
     const auto d = params_.size();
     if (d != 5) throw std::runtime_error("sampleBlock: expected exactly 5 parameters for Draw struct.");
 
     std::vector<std::vector<int>> perm(d);
     for (int j = 0; j < d; ++j) perm[j] = shuffledIndices(n);
-
-    std::vector<Draw> out;
-    out.reserve(n);
 
 
     for (int i = 0; i < n; ++i) {
@@ -93,9 +97,8 @@ std::vector<Draw> LatinHypercubeSampler::sampleBlock(const int n) {
             const double hi = params_[j].max;
             values[j] = lo + u * (hi - lo);
         }
-        out.push_back(Draw{values[0], values[1], values[2], values[3], values[4]});
+        out[i] = Draw{values[0], values[1], values[2], values[3], values[4]};
     }
-    return out;
 }
 
 
@@ -135,18 +138,36 @@ std::vector<std::unique_ptr<Sampler>> PreselectedSampler::split(const int numThr
     return threads;
 }
 
-std::vector<Draw> PreselectedSampler::sampleBlock(const int n) {
-    if (n != 1) throw std::runtime_error("PreselectedSampler: only sampleBlock(1) supported");
+void PreselectedSampler::sampleBlockInto(const int n, std::vector<Draw>& out) {
+    if (n <= 0) {
+        out.clear();
+        return;
+    }
+    if (maxTrials_ > 1 && n != 1) throw std::runtime_error("PreselectedSampler: only sampleBlock(1) supported when maxTrials>1");
 
-    std::vector<Draw> out;
-    if (currentIdx_ >= segEnd_) return out;
+    if (currentIdx_ >= segEnd_) {
+        out.clear();
+        return;
+    }
+    if (maxTrials_ == 1) {
+        const size_t remaining = segEnd_ - currentIdx_;
+        const size_t take = std::min(static_cast<size_t>(n), remaining);
+        if (out.size() != take) out.resize(take);
+        std::copy_n(draws_->begin() + static_cast<std::ptrdiff_t>(currentIdx_), take, out.begin());
+        currentIdx_ += take;
+        return;
+    }
 
-    out.push_back((*draws_)[currentIdx_]);
-    return out;
+    // maxTrials_ > 1: only one draw at a time
+    if (out.size() != 1) out.resize(1);
+    out[0] = (*draws_)[currentIdx_];
 }
+
 
 void PreselectedSampler::reportResult(const TrajectoryResult result) {
     if (currentIdx_ >= segEnd_) return;
+
+    if (maxTrials_ == 1) return;
 
     if (result == TrajectoryResult::REJECTED) currentTrials_++;
 
@@ -159,7 +180,6 @@ void PreselectedSampler::reportResult(const TrajectoryResult result) {
 bool PreselectedSampler::hasFinished() const {
     return currentIdx_ >= segEnd_;
 }
-
 
 
 

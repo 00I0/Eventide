@@ -9,28 +9,27 @@
 using namespace eventide;
 
 
-//------------------------------------------------------------------------------
-// defaultSeed(): mix high-res clock and thread ID for initial seeding
-//------------------------------------------------------------------------------
 uint64_t RngEngine::defaultSeed() {
     const auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-    // return now ^ 0xDEADBEEFCAFEBABEULL;
     const auto tid = std::hash<std::thread::id>()(std::this_thread::get_id());
     return static_cast<uint64_t>(now) ^ (static_cast<uint64_t>(tid) << 1);
 }
 
-//------------------------------------------------------------------------------
-// Constructor: initialize PCG state + one-time ziggurat tables
-//------------------------------------------------------------------------------
-RngEngine::RngEngine(const uint64_t seed) : state_(0), increment_(seed << 1 | 1) {
+
+RngEngine::RngEngine(const uint64_t seed) {
     // Advance state at least once
-    state_ = seed + increment_;
-    state_ = state_ * 6364136223846793005ULL + increment_;
+    setSeed(seed);
 }
 
-//------------------------------------------------------------------------------
-// nextUInt32(): PCG-XSH-RR 32-bit generator
-//------------------------------------------------------------------------------
+void RngEngine::setSeed(const uint64_t seed) {
+    increment_ = seed << 1 | 1;
+    state_ = seed + increment_;
+    state_ = state_ * 6364136223846793005ULL + increment_;
+    haveSpare_ = false;
+    spare_ = 0.0;
+}
+
+
 uint32_t RngEngine::nextUInt32() {
     const uint64_t old = state_;
     state_ = old * 6364136223846793005ULL + increment_;

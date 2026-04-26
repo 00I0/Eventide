@@ -41,8 +41,9 @@ namespace eventide {
                       const std::vector<std::shared_ptr<DataCollector>>& collectors,
                       CompiledExpression validator,
                       int64_t numT,
+                      int64_t minReq,
                       int chunk,
-                      int Tr,
+                      double Tr,
                       int maxC,
                       int workers)
                : originals(collectors) {
@@ -52,7 +53,7 @@ namespace eventide {
                core = std::make_unique<Simulator>(
                     *sampler, *scenario,
                     critGroup, collGroup,
-                    numT, chunk, Tr, maxC, workers,
+                    numT, minReq, chunk, Tr, maxC, workers,
                     validator
                );
           }
@@ -63,6 +64,14 @@ namespace eventide {
                const size_t n = std::min(collectors.size(), originals.size());
                for (size_t i = 0; i < n; ++i)
                     originals[i]->merge(*collectors.at(i));
+          }
+
+          int64_t accepted() const {
+               return core->acceptedCount();
+          }
+
+          int64_t processed() const {
+               return core->processedCount();
           }
      };
 }
@@ -211,7 +220,7 @@ PYBIND11_MODULE(_eventide, m) {
                     std::vector<std::shared_ptr<Criterion>>,
                     std::vector<std::shared_ptr<DataCollector>>,
                     CompiledExpression,
-                    int64_t, int, int, int, int // numT, chunk, Tr, maxC, workers
+                    int64_t, int64_t, int, double, int, int // numT, minReq, chunk, T_run, maxC, workers
                >(),
                py::arg("sampler"),
                py::arg("scenario"),
@@ -219,6 +228,7 @@ PYBIND11_MODULE(_eventide, m) {
                py::arg("collectors"),
                py::arg("validator"),
                py::arg("num_trajectories"),
+               py::arg("min_required"),
                py::arg("chunk_size"),
                py::arg("T_run"),
                py::arg("max_cases"),
@@ -230,5 +240,7 @@ PYBIND11_MODULE(_eventide, m) {
                py::keep_alive<1, 4>(), // criteria list
                py::keep_alive<1, 5>() //  collectors' list
           )
-          .def("run", &PySimulator::run);
+          .def("run", &PySimulator::run)
+          .def_property_readonly("accepted", &PySimulator::accepted)
+          .def_property_readonly("processed", &PySimulator::processed);
 }

@@ -18,7 +18,7 @@ from ._eventide import (
     TimeMatrixCollector as _TimeMatrixCollector,
     DrawCollector as _DrawCollector,
     ActiveSetSizeCollector as _ActiveSetSizeCollector,
-    InfectionTimeCollector as _InfectionTimeCollector
+    InfectionTimeCollector as _InfectionTimeCollector,
 )
 
 
@@ -30,7 +30,7 @@ class Collector(abc.ABC):
     """
 
     @abc.abstractmethod
-    def _get_cpp_collector(self, simulation_length: int, simulation_start_date: datetime):
+    def _get_cpp_collector(self, simulation_length: float, simulation_start_date: datetime):
         """Return the underlying C++ collector instance."""
         raise NotImplemented
 
@@ -296,7 +296,12 @@ class ActiveSetSizeCollector(Collector):
     def __array__(self, dtype=None) -> np.ndarray:
         """Return array of active set sizes at the collection time."""
 
-        return np.asarray(self.__collector.active_set_sizes())
+        raise ValueError('Active set sizes are not stored as a NumPy array.')
+
+    @property
+    def active_sets(self) -> list[list[float]]:
+        """Return a list of active set sizes at the collection time."""
+        return self.__collector.active_set_sizes()
 
     def _get_cpp_collector(self, simulation_length: int, simulation_start_date: datetime):
         """
