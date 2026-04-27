@@ -67,6 +67,10 @@ class PreselectedSampler(Sampler):
 
         self.__sampler = None
 
+    @property
+    def max_trials(self) -> int:
+        return self.__max_trials
+
     def _get_cpp_sampler(self):
         """
         Instantiate (or return cached) C++ PreselectedSampler.

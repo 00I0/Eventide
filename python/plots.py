@@ -14,6 +14,7 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import PercentFormatter
 from scipy import stats
 from scipy.optimize import curve_fit
+from scipy.special import logsumexp, gammaincc
 from scipy.stats import gamma
 
 from python.eventide import Hist1D, Hist2D, InfectionTimeCollector, DrawCollector, ActiveSetSizeCollector, TimeMatrix
@@ -155,7 +156,7 @@ class _Hist1DLayer:
         )
 
         ax.set_xlim(lo, hi)
-        ax.set_xlabel(self.collector.name)
+        ax.set_xlabel(self.label)
         ax.grid(False)
 
         if not (self.show_mean or self.show_median or self.show_conf):
@@ -164,50 +165,50 @@ class _Hist1DLayer:
         y_text = ax.get_ylim()[1] * 0.95
         mean, median, (lo_ci, hi_ci) = _empirical_stats(counts, centers, self.conf_level, self.conf_method)
         if self.show_conf:
-            ax.axvspan(lo_ci, hi_ci, color='gray', alpha=0.3)
+            ax.axvspan(lo_ci, hi_ci, color='C1', alpha=0.125, hatch='//')
             ax.text(
                 lo_ci, y_text,
                 r'$\text{C.I.}_\text{low}$: ' + f'{lo_ci:.2f}',
-                ha='center', va='top', fontsize='x-small',
+                ha='center', va='top', color='C1', fontsize='x-small',
                 rotation=90,
                 bbox=dict(
                     boxstyle='round, pad=0.35',
-                    facecolor=(1, 1, 1, 0.6),
+                    facecolor=(1, 1, 1, 0.8),
                     edgecolor='none'
                 )
             )
             ax.text(
                 hi_ci, y_text,
                 r'$\text{C.I.}_\text{high}$: ' + f'{hi_ci:.2f}',
-                ha='center', va='top', fontsize='x-small',
+                ha='center', va='top', color='C1', fontsize='x-small',
                 rotation=90,
                 bbox=dict(
                     boxstyle='round, pad=0.35',
-                    facecolor=(1, 1, 1, 0.6),
+                    facecolor=(1, 1, 1, 0.8),
                     edgecolor='none'
                 )
             )
         if self.show_mean:
-            ax.axvline(mean, color='C1', ls='--', lw=1.5)
+            ax.axvline(mean, color='C3', ls='-.', lw=1.25)
             ax.text(
                 mean, y_text,
                 f'mean: {mean:.2f}',
-                ha='center', va='top', color='C1', fontsize='x-small', rotation=90,
+                ha='center', va='top', color='C3', fontsize='x-small', rotation=90,
                 bbox=dict(
                     boxstyle='round, pad=0.35',
-                    facecolor=(1, 1, 1, 0.6),
+                    facecolor=(1, 1, 1, 0.8),
                     edgecolor='none'
                 )
             )
         if self.show_median:
-            ax.axvline(median, color='C2', ls='-.', lw=1.5)
+            ax.axvline(median, color='C2', ls='--', lw=1.25)
             ax.text(
                 median, y_text,
-                f'med: {median:.2f}',
+                f'median: {median:.2f}',
                 ha='center', va='top', color='C2', fontsize='x-small', rotation=90,
                 bbox=dict(
                     boxstyle='round, pad=0.35',
-                    facecolor=(1, 1, 1, 0.6),
+                    facecolor=(1, 1, 1, 0.8),
                     edgecolor='none'
                 )
             )
@@ -519,6 +520,7 @@ class HistogramGrid:
             ((ceil(n / c), c) for c in range(1, n + 1)),
             key=lambda x: abs(x[1] / x[0] - self.target_ratio)
         )
+        # rows, cols = 3, 4
         fig, axes = plt.subplots(
             rows, cols,
             figsize=(self.subplot_size * cols, self.subplot_size * rows),
@@ -534,7 +536,7 @@ class HistogramGrid:
 
 
 def plot_histogram_grid(
-        collectors: Sequence[Hist1D | Hist2D],
+        collectors: Sequence[Hist1D | Hist2D | HistSpec],
         target_ratio: float = 16 / 9,
         subplot_size: float = 5.0,
         dpi: int = 100
@@ -593,6 +595,7 @@ class ExtinctionProbabilityPlot:
     ):
         self.start_date = start_date
         self.T_run = int(T_run)
+        self.cutoff_date = cutoff_date
 
         if cutoff_date is None:
             self.cutoff_day = 0
@@ -614,84 +617,159 @@ class ExtinctionProbabilityPlot:
     def add_analytical(
             self,
             draws: np.ndarray,
-            active_set_sizes: np.ndarray,
-            conf: Tuple[float, ...] = (0.3, 0.6, 0.9),
-            colors: Optional[Sequence[str] | str] = None
+            active_set_times: list[list[float]],
+            conf: Optional[Tuple[float, ...]] = (0.3, 0.6, 0.9),
+            colors: Optional[Sequence[str] | str] = None,
+            label: str = 'Analytical',
+            *,
+            method: Literal['ev', 'size_only'] = 'ev',
     ) -> None:
         """
-        Add analytical extinction probability: median + credible bands.
+        Plot the analytical probability that transmission has ended.
+
+        This method computes the extinction probability for each posterior draw and day on the plotting grid,
+        summarizes the median across draws, and (optionally) shades credible bands.
+
+        * method='ev' (expected-value lag, **age-aware**):
+          Uses the per-lineage ages at the cutoff and a deterministic observation.
+
+        * method='size_only' (**age-agnostic** baseline):
+          Ignores ages and uses a single-lineage probability raised to the number of active lineages.
+
+
 
         Args:
-            draws: Accepted draws, shape (N, 5) as [R0, k, r, alpha, theta].
-            active_set_sizes: Shape (N,), aligned with draws.
-            conf: Credible levels, e.g. (0.3, 0.6, 0.9). Values in (0,1).
-            colors: Either a Matplotlib colormap name (str), or a list of colors:
-                first color is used for the median line; subsequent colors are used for bands from widest → narrowest.
-                If omitted, falls back to the Matplotlib color cycle.
+            draws: Array of accepted posterior draws with shape (N, 5) ordered as [R0, k, r, alpha, theta].
+            active_set_times: For each draw, a list of infection times (floats) relative to simulation start.
+            conf: Credible levels for shaded bands, e.g. (0.3, 0.6, 0.9). Set to None to disable bands.
+            colors: Either a Matplotlib colormap name or a sequence of colors.
+                The first color is used for the median line;
+                subsequent colors are used for bands from widest → narrowest.
+                If None, the Matplotlib color cycle is used.
+            label: Legend label for the median curve.
+              method: Analytical formulation to use: 'ev' or 'size_only' (see above).
 
         Raises:
-            ValueError: If input shapes are inconsistent.
-        """
+            ValueError: If input shapes are inconsistent or an unknown method is given.
 
+        Returns:
+            None. The function adds the curve and (optionally) the bands to self.ax.
+        """
+        # ---------- validate & unpack ----------
         if draws.ndim != 2 or draws.shape[1] != 5:
             raise ValueError(f"'draws' must have shape (N, 5); got {draws.shape}")
-        if active_set_sizes.ndim != 1 or active_set_sizes.shape[0] != draws.shape[0]:
-            raise ValueError("'active_set_sizes' must be 1D with same length as draws.")
+        if not isinstance(active_set_times, list) or len(active_set_times) != draws.shape[0]:
+            raise ValueError("'active_set_times' must be a list of length N (same as draws).")
+        if method not in ('ev', 'size_only'):
+            raise ValueError("method must be 'ev' or 'size_only'.")
 
         R0s, ks, rs, alphas, thetas = draws.T
         Reffs = R0s * rs
 
-        L = self.T_run - self.cutoff_day + 1
-        quiet_windows_T = np.arange(1, L + 1)
-        dates = [self.start_date + timedelta(days=int(d)) for d in range(self.cutoff_day, self.cutoff_day + L)]
+        ks = np.maximum(ks, 1e-12)
+        thetas = np.maximum(thetas, np.finfo(float).tiny)
+        tiny = np.finfo(float).tiny
+
+        # ---------- day grid (aligned to empirical binning) ----------
+        start_day = int(np.floor(self.cutoff_day))
+        end_day = int(np.floor(self.T_run))
+        if end_day < start_day:
+            return
+
+        days = np.arange(start_day, end_day + 1, dtype=int)
+        T_vals = days - self.cutoff_day  # quiet-window length T for each day
+        dates = [self.start_date + timedelta(days=int(d)) for d in days]
         date_nums = mdates.date2num(dates)
 
-        # extinction distributions over time
-        probs = []
-        for T in quiet_windows_T:
-            F = gamma.cdf(T, a=alphas, scale=thetas)
-            term1 = 1 + Reffs / ks
-            term2 = 1 + (Reffs * F) / ks
-            p = np.ones_like(term1)
-            mask = term2 > 0
-            p[mask] = (term1[mask] / term2[mask]) ** (-ks[mask])
-            probs.append(np.clip(p ** active_set_sizes, 0, 1))
-        M = np.vstack(probs)  # shape (T_run, N)
+        N = draws.shape[0]
+        L = len(days)
+        P_mat = np.empty((L, N), dtype=float)
 
-        # median + bands
-        levels = tuple(sorted(conf))
-        median = np.median(M, axis=1)
-        band_bounds: list[tuple[float, np.ndarray, np.ndarray]] = []
-        for lvl in sorted(conf):
-            lower = np.percentile(M, (1 - lvl) * 100 / 2, axis=1)
-            upper = np.percentile(M, 100 - (1 - lvl) * 100 / 2, axis=1)
-            band_bounds.append((lvl, lower, upper))
+        # ---------- per-draw curve ----------
+        for m in range(N):
+            # unique infection times for this draw
+            t_list = np.asarray(sorted(set(active_set_times[m])), dtype=float)
+            n_active = int(t_list.size)
 
-        # --- colors ---
+            k = float(ks[m])
+            Reff = float(Reffs[m])
+            alpha = float(alphas[m])
+            theta = float(thetas[m])
+
+            if n_active == 0:
+                P_mat[:, m] = 1.0
+                continue
+
+            if method == 'size_only':
+                # Age-agnostic: single-lineage probability ^ number of actives
+                F_T = gamma.cdf(T_vals, a=alpha, scale=theta)  # (L,)
+                term1 = 1.0 + Reff / k
+                term2 = np.maximum(1.0 + (Reff * F_T) / k, tiny)
+                p_single = (term1 / term2) ** (-k)  # (L,)
+                P = np.power(p_single, n_active, dtype=float)  # (L,)
+            else:
+                # Age-aware EV method with deterministic lag δ = αθ
+                a = self.cutoff_day - t_list  # (I,)
+                a = np.clip(a, 0.0, None)
+                delta = alpha * theta
+
+                a_shift = np.maximum(a - delta, 0.0)  # (I,)
+                a_shift_grid = a_shift[None, :] + T_vals[:, None]  # (L, I)
+
+                Fa = gamma.cdf(a_shift, a=alpha, scale=theta)  # (I,)
+                FaT = gamma.cdf(a_shift_grid, a=alpha, scale=theta)  # (L, I)
+
+                A_i = 1.0 + (Reff * (1.0 - Fa)) / k  # (I,)
+                B_i = 1.0 + (Reff * (FaT - Fa[None, :])) / k  # (L, I)
+                A_i = np.maximum(A_i, tiny)
+                B_i = np.maximum(B_i, tiny)
+
+                # prod_i (A_i / B_i(T))^{-k} in log-space
+                logA = np.log(A_i)[None, :]  # (1, I)
+                logB = np.log(B_i)  # (L, I)
+                log_prod = -k * np.sum(logA - logB, axis=1)  # (L,)
+                P = np.exp(log_prod)  # (L,)
+
+            np.clip(P, 0.0, 1.0, out=P)
+            P_mat[:, m] = P
+
+        # ---------- aggregate across draws ----------
+        median = np.median(P_mat, axis=1)
+
+        bands: list[tuple[float, np.ndarray, np.ndarray]] = []
+        if conf:
+            for lvl in sorted(conf):
+                qlo = (1 - lvl) * 50.0
+                qhi = 100.0 - qlo
+                lo = np.percentile(P_mat, qlo, axis=1)
+                hi = np.percentile(P_mat, qhi, axis=1)
+                bands.append((lvl, lo, hi))
+
+        # ---------- colors & plotting ----------
         if colors is None:
             cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
             median_color = cycle[0]
             band_palette = cycle[1:] or [cycle[0]]
-            band_colors = [band_palette[i % len(band_palette)] for i in range(len(levels))]
+            band_colors = [band_palette[i % len(band_palette)] for i in range(len(bands))]
         elif isinstance(colors, str):
             cmap_obj = plt.get_cmap(colors)
-            n = 1 + len(levels)
+            n = 1 + len(bands)
             pos = np.linspace(0.15, 0.85, num=n)
             rgba = [cmap_obj(p) for p in pos]
             median_color = rgba[0]
             band_colors = rgba[1:]
         else:
             if len(colors) < 1:
-                raise ValueError("colors list must have at least one color (for the median).")
+                raise ValueError('colors list must have at least one color.')
             clist = [mcolors.to_rgba(c) for c in colors]
             median_color = clist[0]
             palette = clist[1:] or [clist[0]]
-            band_colors = [palette[i % len(palette)] for i in range(len(levels))]
+            band_colors = [palette[i % len(palette)] for i in range(len(bands))]
 
-        for (lvl, lo, hi), c in zip(reversed(band_bounds), reversed(band_colors)):
+        for (lvl, lo, hi), c in zip(reversed(bands), reversed(band_colors)):
             self.ax.fill_between(date_nums, lo, hi, alpha=0.25, color=c, label=f'{int(lvl * 100)}% CI')
 
-        self.ax.plot(date_nums, median, lw=2, label='Analytical', color=median_color)
+        self.ax.plot(date_nums, median, lw=2, label=label, color=median_color)
 
     def add_empirical(
             self,
@@ -702,9 +780,9 @@ class ExtinctionProbabilityPlot:
         """
         Add empirical extinction probability from a TimeMatrix.
 
-        For each day d, computes the fraction of trajectories that do not resurge after d:
-        ext(d) = 1 - resurge/valid, where 'resurge' counts outcomes that restart after d and 'valid' counts all
-        outcomes that could have resurged.
+        For each day d, ext(d) = P(no future infections | no infections in (cutoff, d]).
+        With the matrix encoding first-after-cutoff in the columns and T+1 meaning
+        “never again”, this is:
 
         Args:
             matrix: Square array with shape (T+2, T+2) produced by the TimeMatrix accumulator.
@@ -715,22 +793,28 @@ class ExtinctionProbabilityPlot:
         if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1] or matrix.shape[0] < 3:
             raise ValueError("'matrix' must be a square array with shape (T+2, T+2), T>=1.")
 
-        T = matrix.shape[0] - 2
-        d0 = self.cutoff_day
-        d1 = min(self.T_run, T)
+        T = matrix.shape[0] - 2  # last simulated day
+        d0 = int(np.floor(self.cutoff_day))
+        d1 = min(int(np.floor(self.T_run)), T)
         if d0 > d1:
             return
 
-        days = np.arange(d0, d1 + 1)
+        days = np.arange(d0, d1 + 1, dtype=int)
         dates = [self.start_date + timedelta(days=int(d)) for d in days]
         date_nums = mdates.date2num(dates)
 
+        # precompute column sums
+        col_sums = matrix.sum(axis=0)
+        never_again = col_sums[T + 1]  # trajectories with no post-cutoff infections
+
         comp = np.empty_like(days, dtype=float)
-        for i, d in enumerate(days):
-            mask = np.arange(matrix.shape[1]) > d
-            resurge = matrix[d + 1:, mask].sum()
-            valid = matrix[:, mask].sum()
-            comp[i] = 1 - (resurge / valid if valid > 0 else 0.0)
+        total = col_sums.sum()
+        if total <= 0:
+            comp.fill(0.0)
+        else:
+            for i, d in enumerate(days):
+                valid = col_sums[d + 1:].sum()  # count(col > d)
+                comp[i] = (never_again / valid) if valid > 0 else 1.0
 
         self.ax.plot(date_nums, comp, lw=1.5, marker=marker, label='Empirical', color=color)
 
@@ -740,6 +824,1166 @@ class ExtinctionProbabilityPlot:
         self.fig.autofmt_xdate(rotation=30)
         self.fig.tight_layout()
         return self.fig
+
+    def add_analytical3(
+            self,
+            draws: np.ndarray,
+            active_set_times: list[list[float]],
+            conf: Optional[Tuple[float, ...]] = (0.3, 0.6, 0.9),
+            colors: Optional[Sequence[str] | str] = None,
+            label: str = "Analytical",
+            *,
+            method: Literal[
+                "ev",  # age-aware; deterministic lag; plain Gamma kernel
+                "size_only",  # age-agnostic baseline; plain Gamma kernel
+                "ev_exp",  # age-aware; exponential removal    => Gamma with θ_eff
+                "size_only_exp",  # age-agnostic; exponential removal => Gamma with θ_eff
+                "ev_weibull",  # age-aware; Weibull removal        => numerically thinned Gamma
+                "size_only_weibull",  # age-agnostic; Weibull removal     => numerically thinned Gamma
+            ] = "ev",
+            lambda_c: float = 0.0,  # exponential removal rate (1/mean); required for *_exp methods
+            weibull_tau: float = 0.0,  # Weibull scale (τ_c); required for *_weibull methods
+            weibull_nu: float = 0.0,  # Weibull shape (ν); required for *_weibull methods
+    ) -> None:
+        """Plot the analytical probability that transmission has ended.
+
+        This routine computes, for each posterior draw and each plot day, the
+        conditional probability that no further infections occur *after* that day,
+        given that no infections have occurred between the cutoff and that day.
+        The result is summarized by the median across draws and (optionally) shaded
+        credible bands.
+
+        Two modeling axes are supported:
+
+        1) **Age handling**
+           - ``method`` in {``"ev"``, ``"ev_exp"``, ``"ev_weibull"``}:
+             *Age-aware*. Uses per-lineage ages at the cutoff along with a
+             deterministic observation delay :math:`δ = α θ` (shape–scale Gamma).
+           - ``method`` in {``"size_only"``, ``"size_only_exp"``, ``"size_only_weibull"``}:
+             *Age-agnostic*. Uses a single-lineage probability raised to the number
+             of active lineages; does not use per-lineage ages.
+
+        2) **Removal (thinning) model**
+           - Plain kernel (no removal): ``"ev"`` or ``"size_only"``.
+           - **Exponential removal** with rate ``lambda_c``:
+             Equivalent to a Gamma kernel with the same shape ``α`` and an
+             *effective* scale :math:`θ_eff = θ / (1 + λ_c θ)`. Select
+             ``"ev_exp"`` or ``"size_only_exp"``.
+           - **Weibull removal** with scale ``weibull_tau`` and shape ``weibull_nu``:
+             Uses the numerically thinned kernel
+             :math:`F_eff(t) = ∫_0^t w_Γ(u; α, θ) · exp(-(u/τ)^ν) du`.
+             Select ``"ev_weibull"`` or ``"size_only_weibull"``.
+
+        All Gamma calls use **shape–scale** parameterization.
+
+        Args:
+          self: Object providing the plotting context. Must define:
+            - ``start_date`` (date or datetime): calendar origin for x-axis ticks.
+            - ``cutoff_day`` (float): first day to plot (absolute, in simulation units).
+            - ``T_run`` (float): last day to plot (absolute, in simulation units).
+            - ``ax`` (matplotlib.axes.Axes): target axes.
+          draws: Array of accepted posterior draws, shape ``(N, 5)`` ordered as
+            ``[R0, k, r, alpha, theta]``.
+          active_set_times: For each draw ``m``, list of infection times (floats)
+            of lineages active at the cutoff (relative to simulation start). Duplicate
+            times are removed internally.
+          conf: Credible levels for shaded bands (values in (0,1)). If ``None`` or
+            empty, no bands are drawn.
+          colors: Either a Matplotlib colormap name (``str``) or a sequence of colors.
+            The first color is used for the median line; subsequent colors (if any)
+            are used for bands, widest → narrowest. If ``None``, the Matplotlib cycle
+            is used.
+          label: Legend label for the median curve.
+          method: Analytical formulation and removal model. See choices above.
+          lambda_c: Exponential removal rate (1/mean removal time). Must be > 0
+            when ``method`` ends with ``"_exp"``; ignored otherwise.
+          weibull_tau: Weibull removal scale ``τ_c``. Must be > 0 when ``method``
+            ends with ``"_weibull"``; ignored otherwise.
+          weibull_nu: Weibull removal shape ``ν``. Must be > 0 when ``method``
+            ends with ``"_weibull"``; ignored otherwise.
+
+        Raises:
+          ValueError: If inputs have inconsistent shapes or required removal parameters
+            are missing/invalid for the chosen ``method``.
+        """
+
+        # ----------------------------
+        # Helpers: effective F_obs(T)
+        # ----------------------------
+        def _F_plain(x: np.ndarray, a: float, th: float) -> np.ndarray:
+            """Gamma CDF F_Gamma(x; a, th)."""
+            return gamma.cdf(x, a=a, scale=th)
+
+        def _F_exp(x: np.ndarray, a: float, th: float, lam: float) -> np.ndarray:
+            """Effective CDF under exponential removal: Gamma(a, θ_eff)."""
+            theta_eff = th / (1.0 + lam * th)
+            return gamma.cdf(x, a=a, scale=theta_eff)
+
+        def _F_weibull(x: np.ndarray, a: float, th: float, tau: float, nu: float) -> np.ndarray:
+            """Effective CDF under Weibull removal via numerical thinning.
+
+            Computes F_eff(t) = ∫_0^t w_Gamma(u; a, th) * exp(-(u/tau)^nu) du
+            for vector x (t) using a shared integration grid for stability.
+            """
+            x = np.asarray(x, dtype=float)
+            x_clipped = np.maximum(x, 0.0)
+            xmax = float(np.max(x_clipped))
+            if xmax <= 0:
+                return np.zeros_like(x_clipped)
+
+            # Integration grid: 0..xmax, with step based on both Gamma scale and Weibull scale.
+            # Use a modest grid; cumulative trapezoid will be vectorized.
+            grid_max = xmax
+            # Heuristic step: finer of 0.1*min(theta, tau) and grid_max/2000, bounded below.
+            h = max(min(0.1 * min(th, tau), grid_max / 2000.0), grid_max / 5000.0)
+            u = np.arange(0.0, grid_max + h, h, dtype=float)  # (G,)
+            # Gamma pdf · Weibull survival
+            w = gamma.pdf(u, a=a, scale=th) * np.exp(-np.power(u / tau, nu))
+            # Cumulative integral via trapezoid
+            cum = np.cumsum((w[:-1] + w[1:]) * 0.5 * h)
+            cum = np.concatenate(([0.0], cum))  # cum[j] ≈ ∫_0^{u[j]} ...
+            # Interpolate F_eff at x
+            return np.interp(x_clipped, u, cum, left=0.0, right=cum[-1])
+
+        def _select_F(kind: str):
+            """Return a callable F_obs(x, alpha, theta) according to removal model."""
+            if kind in ("ev", "size_only"):
+                return lambda x, a, th: _F_plain(x, a, th)
+            if kind in ("ev_exp", "size_only_exp"):
+                if lambda_c <= 0.0:
+                    raise ValueError("lambda_c must be > 0 for '*_exp' methods.")
+                return lambda x, a, th: _F_exp(x, a, th, lambda_c)
+            if kind in ("ev_weibull", "size_only_weibull"):
+                if weibull_tau <= 0.0 or weibull_nu <= 0.0:
+                    raise ValueError("weibull_tau and weibull_nu must be > 0 for '*_weibull' methods.")
+                return lambda x, a, th: _F_weibull(x, a, th, weibull_tau, weibull_nu)
+            raise ValueError("Unknown method.")
+
+        # ----------------------------
+        # Validate & unpack inputs
+        # ----------------------------
+        if draws.ndim != 2 or draws.shape[1] != 5:
+            raise ValueError(f"'draws' must have shape (N, 5); got {draws.shape}")
+        if not isinstance(active_set_times, list) or len(active_set_times) != draws.shape[0]:
+            raise ValueError("'active_set_times' must be a list of length N (same as draws).")
+
+        R0s, ks, rs, alphas, thetas = draws.T
+        Reffs = R0s * rs
+
+        ks = np.maximum(ks, 1e-12)
+        thetas = np.maximum(thetas, np.finfo(float).tiny)
+        tiny = np.finfo(float).tiny
+
+        # ----------------------------
+        # Plot grid aligned to empirical
+        # ----------------------------
+        start_day = int(np.floor(self.cutoff_day))
+        end_day = int(np.floor(self.T_run))
+        if end_day < start_day:
+            return
+
+        days = np.arange(start_day, end_day + 1, dtype=int)
+        T_vals = days - self.cutoff_day  # quiet-window length T for each day
+        dates = [self.start_date + timedelta(days=int(d)) for d in days]
+        date_nums = mdates.date2num(dates)
+
+        N = draws.shape[0]
+        L = len(days)
+        P_mat = np.empty((L, N), dtype=float)
+
+        # Choose effective CDF according to removal model encoded in method
+        F_eff = _select_F(method)
+
+        # ----------------------------
+        # Compute per-draw curves
+        # ----------------------------
+        for m in range(N):
+            # unique infection times for this draw (avoid double counting)
+            t_list = np.asarray(sorted(set(active_set_times[m])), dtype=float)
+            n_active = int(t_list.size)
+
+            k = float(ks[m])
+            Reff = float(Reffs[m])
+            alpha = float(alphas[m])
+            theta = float(thetas[m])
+
+            if n_active == 0:
+                P_mat[:, m] = 1.0
+                continue
+
+            if method.startswith("size_only"):
+                # Age-agnostic: use a single-lineage probability with F_eff(T)
+                F_T = F_eff(T_vals, alpha, theta)  # (L,)
+                term1 = 1.0 + Reff / k
+                term2 = np.maximum(1.0 + (Reff * F_T) / k, tiny)
+                p_single = (term1 / term2) ** (-k)  # (L,)
+                P = np.power(p_single, n_active, dtype=float)  # (L,)
+
+            else:
+                # Age-aware EV: per-lineage factors with deterministic lag δ = αθ
+                a = np.clip(self.cutoff_day - t_list, 0.0, None)  # (I,)
+                delta = alpha * theta
+
+                # Shift by δ; evaluate F_eff at ages and ages+T grid
+                a_shift = np.maximum(a - delta, 0.0)  # (I,)
+                a_shift_grid = a_shift[None, :] + T_vals[:, None]  # (L, I)
+
+                Fa = F_eff(a_shift, alpha, theta)  # (I,)
+                FaT = F_eff(a_shift_grid, alpha, theta)  # (L, I)
+
+                # Core per-lineage terms
+                A_i = 1.0 + (Reff * (1.0 - Fa)) / k  # (I,)
+                B_i = 1.0 + (Reff * (FaT - Fa[None, :])) / k  # (L, I)
+                A_i = np.maximum(A_i, tiny)
+                B_i = np.maximum(B_i, tiny)
+
+                # Product over lineages: ∏ (A_i / B_i(T))^{-k}
+                logA = np.log(A_i)[None, :]  # (1, I)
+                logB = np.log(B_i)  # (L, I)
+                log_prod = -k * np.sum(logA - logB, axis=1)  # (L,)
+                P = np.exp(log_prod)  # (L,)
+
+            np.clip(P, 0.0, 1.0, out=P)
+            P_mat[:, m] = P
+
+        # ----------------------------
+        # Aggregate across draws
+        # ----------------------------
+        median = np.median(P_mat, axis=1)
+
+        bands: list[tuple[float, np.ndarray, np.ndarray]] = []
+        if conf:
+            for lvl in sorted(conf):
+                qlo = (1 - lvl) * 50.0
+                qhi = 100.0 - qlo
+                lo = np.percentile(P_mat, qlo, axis=1)
+                hi = np.percentile(P_mat, qhi, axis=1)
+                bands.append((lvl, lo, hi))
+
+        # ----------------------------
+        # Colors & plotting
+        # ----------------------------
+        if colors is None:
+            cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+            median_color = cycle[0]
+            band_palette = cycle[1:] or [cycle[0]]
+            band_colors = [band_palette[i % len(bands)] for i in range(len(bands))]
+        elif isinstance(colors, str):
+            cmap_obj = plt.get_cmap(colors)
+            n = 1 + len(bands)
+            pos = np.linspace(0.15, 0.85, num=n)
+            rgba = [cmap_obj(p) for p in pos]
+            median_color = rgba[0]
+            band_colors = rgba[1:]
+        else:
+            if len(colors) < 1:
+                raise ValueError("colors list must have at least one color.")
+            clist = [mcolors.to_rgba(c) for c in colors]
+            median_color = clist[0]
+            palette = clist[1:] or [clist[0]]
+            band_colors = [palette[i % len(bands)] for i in range(len(bands))]
+
+        for (lvl, lo, hi), c in zip(reversed(bands), reversed(band_colors)):
+            self.ax.fill_between(date_nums, lo, hi, alpha=0.25, color=c, label=f"{int(lvl * 100)}% CI")
+
+        self.ax.plot(date_nums, median, lw=2, label=label, color=median_color)
+
+    def add_analytical_first_after(
+            self,
+            draws: np.ndarray,
+            active_set_times: list[list[float]],
+            conf: Optional[Tuple[float, ...]] = (0.3, 0.6, 0.9),
+            colors: Optional[Sequence[str] | str] = None,
+            label: str = "Analytical",
+            *,
+            horizon: Literal["finite", "infinite"] = "finite",
+            aggregate: Literal["median", "mean"] = "median",
+    ) -> None:
+        """Plot the analytical counterpart of the empirical 'first-after' estimator.
+
+        This computes, for each posterior draw m and each plotted day d >= cutoff,
+        the conditional probability that there are no infections **after** day d,
+        given that there were no infections in (cutoff, d]. It uses only information
+        available up to the cutoff (infection times before the cutoff and model
+        parameters), and matches the empirical estimand when `horizon="finite"`.
+
+        Let T = d - cutoff be the quiet-window length. For a draw with parameters
+        (R0, k, r, alpha, theta), define R_eff = R0 * r, and for each lineage i in
+        the active set at the cutoff, its age a_i = max(cutoff - t_i, 0). With the
+        Gamma(shape=alpha, scale=theta) generation kernel and the NB–Gamma mixing,
+        the survival of the first post-cutoff infection is
+
+            S(T) = Π_i [ 1 + (R_eff / k) * Δ_i(T) ]^{-k},
+            Δ_i(T) = F_Γ(a_i + T; α, θ) - F_Γ(a_i; α, θ),
+
+        where F_Γ is the Gamma CDF in shape–scale parameterization. The plotted
+        conditional probability equals S(T_h) / S(T), where:
+
+          - horizon="finite":  T_h = T_run - cutoff  (matches empirical finite horizon)
+          - horizon="infinite": T_h = ∞, i.e., Δ_i(T_h) = 1 - F_Γ(a_i; α, θ)
+
+        The function aggregates per-draw curves across draws using either the median
+        (default) or the mean, and optionally shades credible bands.
+
+        Args:
+          self: Object providing plotting context. Must define:
+              - start_date (date or datetime): origin for x-axis ticks.
+              - cutoff_day (float): first day to plot (absolute, simulation time).
+              - T_run (float): last day to plot (absolute, simulation time).
+              - ax (matplotlib.axes.Axes): target axes.
+          draws: Array of accepted posterior draws with shape (N, 5) ordered as
+            [R0, k, r, alpha, theta].
+          active_set_times: For each draw m, a list of infection times (floats)
+            for lineages active at the cutoff (relative to simulation start).
+            Duplicates are removed internally per draw.
+          conf: Credible levels for shaded bands (values in (0, 1)). If None or
+            empty, no bands are drawn.
+          colors: Either a Matplotlib colormap name (str) or a sequence of colors.
+            The first color is used for the median/mean line; subsequent colors (if any)
+            are used for bands from widest → narrowest. If None, uses the Matplotlib
+            default color cycle.
+          label: Legend label for the aggregated analytical curve.
+          horizon: "finite" to match the empirical finite-horizon estimator
+            (uses T_h = T_run - cutoff), or "infinite" for the theoretical infinite
+            horizon (uses T_h = ∞).
+          aggregate: "median" (robust summary; default) or "mean" (matches the
+            expectation of an empirical proportion across draws).
+
+        Raises:
+          ValueError: If input shapes are inconsistent or if arguments are invalid.
+
+        Returns:
+          None. Adds the analytical curve and (optionally) credible bands to self.ax.
+        """
+        # ---- validate & unpack ----
+        if draws.ndim != 2 or draws.shape[1] != 5:
+            raise ValueError(f"'draws' must have shape (N, 5); got {draws.shape}")
+        if not isinstance(active_set_times, list) or len(active_set_times) != draws.shape[0]:
+            raise ValueError("'active_set_times' must be a list of length N (same as draws).")
+        if horizon not in ("finite", "infinite"):
+            raise ValueError("horizon must be 'finite' or 'infinite'.")
+        if aggregate not in ("median", "mean"):
+            raise ValueError("aggregate must be 'median' or 'mean'.")
+
+        R0s, ks, rs, alphas, thetas = draws.T
+        Reffs = R0s * rs
+
+        # ks = np.maximum(ks, 1e-12)
+        thetas = np.maximum(thetas, np.finfo(float).tiny)
+        tiny = np.finfo(float).tiny
+
+        # ---- day grid aligned to empirical binning ----
+        start_day = int(np.floor(self.cutoff_day))
+        end_day = int(np.floor(self.T_run))
+        if end_day < start_day:
+            return
+
+        days = np.arange(start_day, end_day + 1, dtype=int)
+        T_vals = days - self.cutoff_day  # quiet-window lengths for plotted days
+        dates = [self.start_date + timedelta(days=int(d)) for d in days]
+        date_nums = mdates.date2num(dates)
+
+        # finite-horizon length from cutoff to T_run (nonnegative)
+        T_h = float(self.T_run - self.cutoff_day)
+
+        N = draws.shape[0]
+        L = len(days)
+        P_mat = np.empty((L, N), dtype=float)
+
+        # ---- per-draw computation ----
+        for m in range(N):
+            # unique infection times (avoid double-counting a lineage)
+            t_list = np.asarray(sorted(set(active_set_times[m])), dtype=float)
+            I = int(t_list.size)
+
+            k = float(ks[m])
+            Reff = float(Reffs[m])
+            alpha = float(alphas[m])
+            theta = float(thetas[m])
+
+            if I == 0:
+                P_mat[:, m] = 1.0
+                continue
+
+            # ages at cutoff and base CDF at ages
+            a = np.clip(self.cutoff_day - t_list, 0.0, None)  # (I,)
+            Fa = gamma.cdf(a, a=alpha, scale=theta)  # (I,)
+
+            # Δ_i(T) = F(a_i + T) - F(a_i)
+            FaT = gamma.cdf(a[None, :] + T_vals[:, None], a=alpha, scale=theta)  # (L, I)
+            Delta_T = np.maximum(FaT - Fa[None, :], 0.0)  # (L, I)
+
+            # Δ_i(T_horizon)
+            if horizon == "finite":
+                FaH = gamma.cdf(a + T_h, a=alpha, scale=theta)  # (I,)
+                Delta_H = np.maximum(FaH - Fa, 0.0)  # (I,)
+            else:
+                Delta_H = 1.0 - Fa  # (I,)
+
+            # S(T) = Π_i [1 + (Reff/k) Δ_i(T)]^{-k}
+            # Compute log S(T) for stability, then P(T) = S(T_h)/S(T).
+            term_den = np.maximum(1.0 + (Reff / k) * Delta_T, tiny)  # (L, I)
+            term_num = np.maximum(1.0 + (Reff / k) * Delta_H, tiny)  # (I,)
+
+            logS_T = -k * np.sum(np.log(term_den), axis=1)  # (L,)
+            logS_H = -k * np.sum(np.log(term_num))  # scalar
+
+            # P_m(T) = exp(logS_H - logS_T)
+            P = np.exp(logS_H - logS_T)  # (L,)
+            np.clip(P, 0.0, 1.0, out=P)
+            P_mat[:, m] = P
+
+        # ---- aggregate across draws ----
+        if aggregate == "median":
+            center = np.median(P_mat, axis=1)
+        else:
+            center = np.mean(P_mat, axis=1)
+
+        bands: list[tuple[float, np.ndarray, np.ndarray]] = []
+        if conf:
+            for lvl in sorted(conf):
+                qlo = (1 - lvl) * 50.0
+                qhi = 100.0 - qlo
+                lo = np.percentile(P_mat, qlo, axis=1)
+                hi = np.percentile(P_mat, qhi, axis=1)
+                bands.append((lvl, lo, hi))
+
+        # ---- colors & plotting ----
+        if colors is None:
+            cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+            median_color = cycle[0]
+            band_palette = cycle[1:] or [cycle[0]]
+            band_colors = [band_palette[i % len(bands)] for i in range(len(bands))]
+        elif isinstance(colors, str):
+            cmap_obj = plt.get_cmap(colors)
+            n = 1 + len(bands)
+            pos = np.linspace(0.15, 0.85, num=n)
+            rgba = [cmap_obj(p) for p in pos]
+            median_color = rgba[0]
+            band_colors = rgba[1:]
+        else:
+            if len(colors) < 1:
+                raise ValueError("colors list must have at least one color.")
+            clist = [mcolors.to_rgba(c) for c in colors]
+            median_color = clist[0]
+            palette = clist[1:] or [clist[0]]
+            band_colors = [palette[i % len(bands)] for i in range(len(bands))]
+
+        for (lvl, lo, hi), c in zip(reversed(bands), reversed(band_colors)):
+            self.ax.fill_between(date_nums, lo, hi, alpha=0.25, color=c, label=f"{int(lvl * 100)}% CI")
+
+        agg_label = f"{label} ({aggregate})" if aggregate in ("median", "mean") else label
+        self.ax.plot(date_nums, center, lw=2, label=agg_label, color=median_color)
+
+    def add_analytical_mixture(
+            self,
+            draws: np.ndarray,
+            active_set_times: list[list[float]],
+            conf: Optional[Tuple[float, ...]] = (0.3, 0.6, 0.9),
+            colors: Optional[Sequence[str] | str] = None,
+            label: str = "Analytical (mixture)",
+            *,
+            horizon: Literal["finite", "infinite"] = "infinite",
+            bootstrap_samples: int = 0,
+            random_state: Optional[int] = None,
+    ) -> None:
+        """Plot the analytical counterpart of the empirical first-after estimator
+        using a *mixture (ratio-of-sums)* aggregation across draws.
+
+        For each accepted draw ``m`` with parameters
+        :math:`(R_{0m}, k_m, r_m, \\alpha_m, \\theta_m)` and active-set ages
+        :math:`a_{mi}=\\max(t_\\star - t_{mi}, 0)`, the survival of the
+        **first post-cutoff infection time** over a quiet window of length ``T`` is
+
+        .. math::
+
+            S_m(T)
+            \\,=\\, \\prod_{i\\in\\mathcal I_m}\\big(1 + c_m\\,\\Delta_{mi}(T)\\big)^{-k_m},
+            \\quad
+            c_m = R_{\\rm eff,m}/k_m,
+            \\quad
+            \\Delta_{mi}(T) = F_\\Gamma(a_{mi}+T;\\alpha_m,\\theta_m) - F_\\Gamma(a_{mi};\\alpha_m,\\theta_m),
+
+        where :math:`F_\\Gamma` is the Gamma CDF in **shape–scale** form and
+        :math:`R_{\\rm eff,m}=R_{0m}r_m`.
+
+        The empirical curve at day :math:`d=t_\\star+T` estimates the conditional probability
+
+        .. math::
+
+            \\Pr(\\text{no infection after }d \\mid \\text{no infection in }(t_\\star,d])
+            \\,=\\, \\frac{\\Pr(Y>T_h)}{\\Pr(Y>T)}
+            \\,=\\, \\frac{S_m(T_h)}{S_m(T)} ,
+
+        with :math:`Y` the first-after time. Aggregating across a mixture of draws,
+        the empirical *proportion* is a **ratio of counts**, whose expectation equals
+        a **ratio of expectations**:
+
+        .. math::
+
+            p_{\\rm mix}(T)
+            \\,=\\,
+            \\frac{\\sum_m S_m(T_h)}{\\sum_m S_m(T)}.
+
+        This function evaluates :math:`p_{\\rm mix}(T)` on the plotting grid, using
+        only information available at the cutoff (parameters and pre-cutoff infection times).
+        No post-cutoff simulation is required.
+
+        Args:
+          self: Object providing plotting context. Must define:
+            - ``start_date`` (date or datetime): origin for x-axis ticks.
+            - ``cutoff_day`` (float): first day to plot (absolute simulation time).
+            - ``T_run`` (float): last day to plot (absolute simulation time).
+            - ``ax`` (matplotlib.axes.Axes): target axes.
+          draws: Array of accepted draws with shape ``(N, 5)`` ordered as
+            ``[R0, k, r, alpha, theta]``. Gamma parameters use shape–scale.
+          active_set_times: For each draw ``m``, list of infection times (floats)
+            ``t_{mi}`` of lineages that are active at the cutoff; times are relative
+            to the simulation start. Duplicates are removed internally per draw.
+          conf: Credible levels for optional shaded bands (values in (0,1)). Bands are
+            computed by bootstrap over draws when ``bootstrap_samples > 0``. Set to
+            ``None`` or ``()`` to disable bands.
+          colors: Either a Matplotlib colormap name (``str``) or a sequence of colors.
+            The first color is used for the main curve; subsequent colors (if any) are
+            used for bands from widest → narrowest. If ``None``, the Matplotlib cycle
+            is used.
+          label: Legend label for the analytical curve.
+          horizon: Time horizon for the numerator:
+            - ``"infinite"``: uses :math:`T_h=\\infty`, i.e.
+              :math:`\\Delta_{mi}(\\infty)=1-F_\\Gamma(a_{mi};\\alpha_m,\\theta_m)`.
+            - ``"finite"``: uses :math:`T_h = T_{\\max} = T_{\\rm run}-t_\\star`.
+          bootstrap_samples: Number of bootstrap resamples of draws to build uncertainty
+            bands for the mixture curve. Set to ``0`` to skip bands (fastest).
+          random_state: Seed for the bootstrap RNG (for reproducibility). Ignored if
+            ``bootstrap_samples == 0``.
+
+        Raises:
+          ValueError: If input shapes are inconsistent or arguments are invalid.
+
+        Returns:
+          None. The function adds the mixture curve (and optional bands) to ``self.ax``.
+        """
+        # -------- validate inputs --------
+        if draws.ndim != 2 or draws.shape[1] != 5:
+            raise ValueError(f"'draws' must have shape (N, 5); got {draws.shape}")
+        if not isinstance(active_set_times, list) or len(active_set_times) != draws.shape[0]:
+            raise ValueError("'active_set_times' must be a list of length N (same as draws).")
+        if horizon not in ("finite", "infinite"):
+            raise ValueError("horizon must be 'finite' or 'infinite'.")
+        if bootstrap_samples < 0:
+            raise ValueError("bootstrap_samples must be >= 0.")
+
+        R0s, ks, rs, alphas, thetas = draws.T
+        Reffs = R0s * rs
+
+        ks = np.maximum(ks, 1e-12)
+        thetas = np.maximum(thetas, np.finfo(float).tiny)
+        tiny = np.finfo(float).tiny
+
+        # -------- plotting grid aligned to empirical bins --------
+        start_day = int(np.floor(self.cutoff_day))
+        end_day = int(np.floor(self.T_run))
+        if end_day < start_day:
+            return
+
+        days = np.arange(start_day, end_day + 1, dtype=int)
+        T_vals = days - self.cutoff_day  # quiet-window lengths for each plotted day
+        dates = [self.start_date + timedelta(days=int(d)) for d in days]
+        date_nums = mdates.date2num(dates)
+
+        # finite horizon length from cutoff to end of run
+        T_h = float(self.T_run - self.cutoff_day)
+
+        N = draws.shape[0]
+        L = len(days)
+
+        # We'll compute log S_m(T) for all T (shape LxN) and log S_m(T_h) (shape N,)
+        logS_T = np.empty((L, N), dtype=float)
+        logS_H = np.empty((N,), dtype=float)
+
+        # -------- per-draw survival computations --------
+        for m in range(N):
+            # unique infection times for this draw (avoid double counting)
+            t_list = np.asarray(sorted(set(active_set_times[m])), dtype=float)
+
+            k = float(ks[m])
+            Reff = float(Reffs[m])
+            alpha = float(alphas[m])
+            theta = float(thetas[m])
+
+            if t_list.size == 0:
+                # No active lineages at cutoff -> S_m(T) = 1 for all T
+                logS_T[:, m] = 0.0
+                logS_H[m] = 0.0
+                continue
+
+            # Ages at cutoff and base Gamma CDF at ages
+            a = np.clip(self.cutoff_day - t_list, 0.0, None)  # (I,)
+            Fa = gamma.cdf(a, a=alpha, scale=theta)  # (I,)
+
+            # Δ_i(T) over grid: F(a_i + T) - F(a_i)
+            FaT = gamma.cdf(a[None, :] + T_vals[:, None], a=alpha, scale=theta)  # (L, I)
+            Delta_T = np.maximum(FaT - Fa[None, :], 0.0)  # (L, I)
+
+            # Δ_i(T_horizon)
+            if horizon == "finite":
+                FaH = gamma.cdf(a + T_h, a=alpha, scale=theta)  # (I,)
+                Delta_H = np.maximum(FaH - Fa, 0.0)  # (I,)
+            else:
+                Delta_H = 1.0 - Fa  # (I,)
+
+            # S_m(T) = Π_i [1 + (Reff/k) Δ_i(T)]^{-k}
+            # Compute in log-space: logS_m(T) = -k * Σ_i log(1 + (Reff/k) Δ_i(T))
+            term_T = np.maximum(1.0 + (Reff / k) * Delta_T, tiny)  # (L, I)
+            logS_T[:, m] = -k * np.sum(np.log(term_T), axis=1)  # (L,)
+
+            # S_m(T_h) similarly
+            term_H = np.maximum(1.0 + (Reff / k) * Delta_H, tiny)  # (I,)
+            logS_H[m] = -k * np.sum(np.log(term_H))  # ()
+
+        # -------- mixture aggregation: ratio of sums across draws --------
+        # p_mix(T) = sum_m S_m(T_h) / sum_m S_m(T) = exp( logsumexp(logS_H) - logsumexp(logS_T, axis=1) )
+        log_num = logsumexp(logS_H)  # scalar
+        log_den = logsumexp(logS_T, axis=1)  # (L,)
+        p_mix = np.exp(log_num - log_den)  # (L,)
+        np.clip(p_mix, 0.0, 1.0, out=p_mix)
+
+        # -------- optional bootstrap bands over draws --------
+        bands: list[tuple[float, np.ndarray, np.ndarray]] = []
+        if conf and bootstrap_samples > 0:
+            rng = np.random.default_rng(random_state)
+            B = bootstrap_samples
+            samples = np.empty((B, L), dtype=float)
+
+            for b in range(B):
+                idx = rng.integers(0, N, size=N)  # bootstrap resample of draws
+                log_num_b = logsumexp(logS_H[idx])  # scalar
+                log_den_b = logsumexp(logS_T[:, idx], axis=1)
+                pb = np.exp(log_num_b - log_den_b)
+                np.clip(pb, 0.0, 1.0, out=pb)
+                samples[b, :] = pb
+
+            for lvl in sorted(conf):
+                qlo = (1 - lvl) * 50.0
+                qhi = 100.0 - qlo
+                lo = np.percentile(samples, qlo, axis=0)
+                hi = np.percentile(samples, qhi, axis=0)
+                bands.append((lvl, lo, hi))
+
+        # -------- colors & plotting --------
+        if colors is None:
+            cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+            main_color = cycle[0]
+            band_palette = cycle[1:] or [cycle[0]]
+            band_colors = [band_palette[i % len(bands)] for i in range(len(bands))]
+        elif isinstance(colors, str):
+            cmap_obj = plt.get_cmap(colors)
+            n = 1 + len(bands)
+            pos = np.linspace(0.15, 0.85, num=n)
+            rgba = [cmap_obj(p) for p in pos]
+            main_color = rgba[0]
+            band_colors = rgba[1:]
+        else:
+            if len(colors) < 1:
+                raise ValueError("colors list must have at least one color.")
+            clist = [mcolors.to_rgba(c) for c in colors]
+            main_color = clist[0]
+            palette = clist[1:] or [clist[0]]
+            band_colors = [palette[i % len(bands)] for i in range(len(bands))]
+
+        for (lvl, lo, hi), c in zip(reversed(bands), reversed(band_colors)):
+            self.ax.fill_between(date_nums, lo, hi, alpha=0.25, color=c, label=f"{int(lvl * 100)}% CI")
+
+        self.ax.plot(date_nums, p_mix, lw=2, label=label, color=main_color)
+
+    from typing import Literal, Optional, Sequence, Tuple
+    import numpy as np
+
+    def add_analytical_surrogate(
+            self,
+            draws: np.ndarray,
+            active_set_times: list[list[float]],
+            conf: Optional[Tuple[float, ...]] = (0.3, 0.6, 0.9),
+            colors: Optional[Sequence[str] | str] = None,
+            label: str = "Analytical",
+            *,
+            method: Literal["exact", "gompertz", "two_exp", "gamma_moment"] = "gompertz",
+            horizon: Literal["infinite", "finite"] = "infinite",
+            rho: float = 3.0,
+            bootstrap_samples: int = 0,
+            random_state: Optional[int] = None,
+    ) -> None:
+        """Plot an analytical approximation to the empirical “no-further-infection” curve,
+        using only pre-cutoff information (parameters + infection times up to the cutoff).
+
+        The target estimand matches the empirical first-after estimator. For a quiet
+        window length T (days after cutoff), each accepted draw m has a first-after
+        survival S_m(T). The empirical proportion is a ratio of counts across draws,
+        whose expectation equals the **ratio of expectations**:
+
+            p_mix(T) = sum_m S_m(T_h) / sum_m S_m(T),
+
+        where T_h is the numerator’s horizon (∞ for infinite-horizon extinction, or
+        T_run - cutoff for a finite horizon).
+
+        This function provides several per-draw models for S_m(T) that depend only on
+        (R0, k, r, alpha, theta) and the ages at cutoff a_{mi} = max(cutoff - t_{mi}, 0):
+
+          • method="exact":     Exact NB–Gamma first-after survival.
+          • method="gompertz":  Single-parameter hazard surrogate that matches the exact
+                                start value and initial slope; closed form.
+          • method="two_exp":   Two-exponential hazard surrogate that matches value,
+                                slope, and curvature at 0; closed form (depends on rho).
+          • method="gamma_moment": Moment-matched Gamma-driven hazard shape using
+                                incomplete-gamma moments; closed form.
+
+        All gamma calls use shape–scale parameterization.
+
+        Args:
+          draws: Accepted posterior draws, shape (N, 5) ordered as [R0, k, r, alpha, theta].
+          active_set_times: For each draw m, list of infection times (floats) for lineages
+            active at the cutoff (relative to simulation start). Duplicates are removed per draw.
+          conf: Credible levels for shaded bands (values in (0, 1)). Set to None or () to skip.
+          colors: Matplotlib colormap name (str) or list of colors. First color is the line;
+            remaining colors (if any) are used for the bands from widest → narrowest.
+          label: Legend label for the plotted curve.
+          method: Per-draw survival model; see choices above.
+          horizon: Numerator horizon. "infinite" uses T_h = ∞; "finite" uses T_h = T_run - cutoff.
+          rho: Ratio β2/β1 used by method="two_exp" (β2 = rho * β1). Must be > 1.
+          bootstrap_samples: If > 0, build uncertainty bands by bootstrapping draws (fast).
+          random_state: RNG seed for bootstrap.
+
+        Raises:
+          ValueError: If inputs or options are invalid.
+
+        Returns:
+          None. Adds the analytical mixture curve (and optional bands) to self.ax.
+        """
+        # -------- validate inputs --------
+        if draws.ndim != 2 or draws.shape[1] != 5:
+            raise ValueError(f"'draws' must have shape (N, 5); got {draws.shape}")
+        if not isinstance(active_set_times, list) or len(active_set_times) != draws.shape[0]:
+            raise ValueError("'active_set_times' must be a list of length N (same as draws).")
+        if method not in {"exact", "gompertz", "two_exp", "gamma_moment"}:
+            raise ValueError("method must be one of {'exact','gompertz','two_exp','gamma_moment'}.")
+        if horizon not in {"infinite", "finite"}:
+            raise ValueError("horizon must be 'infinite' or 'finite'.")
+        if method == "two_exp" and not (rho is not None and rho > 1.0):
+            raise ValueError("for method='two_exp', rho must be > 1.")
+        if bootstrap_samples < 0:
+            raise ValueError("bootstrap_samples must be >= 0.")
+
+        # -------- unpack draws --------
+        R0s, ks, rs, alphas, thetas = draws.T
+        Reffs = R0s * rs
+        ks = np.maximum(ks, 1e-12)
+        thetas = np.maximum(thetas, np.finfo(float).tiny)
+        tiny = np.finfo(float).tiny
+
+        # -------- plotting grid --------
+        start_day = int(np.floor(self.cutoff_day))
+        end_day = int(np.floor(self.T_run))
+        if end_day < start_day:
+            return
+        days = np.arange(start_day, end_day + 1, dtype=int)
+        T_vals = days - self.cutoff_day  # quiet-window lengths for plotted days (float)
+        dates = [self.start_date + timedelta(days=int(d)) for d in days]
+        date_nums = mdates.date2num(dates)
+        T_h = float(self.T_run - self.cutoff_day)  # finite horizon length
+
+        N = draws.shape[0]
+        L = len(days)
+
+        # Will accumulate log S_m(T) for all T (LxN) and log S_m(T_h) (N,)
+        logS_T = np.empty((L, N), dtype=float)
+        logS_H = np.empty((N,), dtype=float)
+
+        # -------- helper: compute exact S_m(T) ingredients from pre-cutoff ages --------
+        def _ages_and_CDFs(t_list: np.ndarray, alpha: float, theta: float):
+            """Compute ages at cutoff and base CDF/pdf at ages."""
+            a = np.clip(self.cutoff_day - t_list, 0.0, None)  # (I,)
+            Fa = gamma.cdf(a, a=alpha, scale=theta)  # (I,)
+            fa = gamma.pdf(a, a=alpha, scale=theta)  # (I,)
+            return a, Fa, fa
+
+        # -------- per-draw computation of S_m(T) according to method --------
+        for m in range(N):
+            # unique infection times for this draw
+            t_list = np.asarray(sorted(set(active_set_times[m])), dtype=float)
+
+            k = float(ks[m])
+            Reff = float(Reffs[m])
+            alpha = float(alphas[m])
+            theta = float(thetas[m])
+
+            if t_list.size == 0:
+                # No active lineages at cutoff -> S_m(T) ≡ 1
+                logS_T[:, m] = 0.0
+                logS_H[m] = 0.0
+                continue
+
+            a, Fa, fa = _ages_and_CDFs(t_list, alpha, theta)
+            c = Reff / k
+
+            if method == "exact":
+                # Δ_i(T) = F(a_i + T) - F(a_i)
+                FaT = gamma.cdf(a[None, :] + T_vals[:, None], a=alpha, scale=theta)  # (L,I)
+                Delta_T = np.maximum(FaT - Fa[None, :], 0.0)  # (L,I)
+
+                if horizon == "finite":
+                    FaH = gamma.cdf(a + T_h, a=alpha, scale=theta)  # (I,)
+                    Delta_H = np.maximum(FaH - Fa, 0.0)  # (I,)
+                else:
+                    Delta_H = 1.0 - Fa  # (I,)
+
+                term_T = np.maximum(1.0 + c * Delta_T, tiny)
+                term_H = np.maximum(1.0 + c * Delta_H, tiny)
+
+                logS_T[:, m] = -k * np.sum(np.log(term_T), axis=1)
+                logS_H[m] = -k * np.sum(np.log(term_H))
+                continue
+
+            # For surrogates we need: A_m = -log S_m(∞), h0, and optionally h1
+            # Exact S_m(∞) (uses only pre-cutoff info)
+            Delta_inf = 1.0 - Fa  # (I,)
+            term_inf = np.maximum(1.0 + c * Delta_inf, tiny)  # (I,)
+            A_m = k * np.sum(np.log(term_inf))  # A_m = -log S_m(∞) >= 0
+            if A_m <= 0.0:
+                # Degenerate: no chance of post-cutoff transmission
+                logS_T[:, m] = 0.0
+                logS_H[m] = 0.0
+                continue
+
+            # Initial hazard h(0) and (optionally) its derivative
+            H0 = Reff * float(np.sum(fa))  # h(0) = R_eff * Σ f(a_i)
+            # h'(0) = R_eff * Σ f'(a_i) - (R_eff^2/k) * Σ f(a_i)^2
+            # f'_Gamma(a) = f(a) * ( (α-1)/a - 1/θ ) for a>0; for a=0 and α>1, limit = -∞, handle numerically:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                fprime = fa * ((alpha - 1.0) / np.maximum(a, tiny) - 1.0 / theta)
+            H1 = Reff * float(np.sum(fprime)) - (Reff * Reff / k) * float(np.sum(fa * fa))
+
+            if method == "gompertz":
+                # Hazard surrogate: h̃(T) = θ e^{-β T} with θ=H0, β=H0/A_m
+                theta_h = H0
+                beta_h = H0 / A_m if A_m > 0 else 0.0
+                # S̃(T) = exp( - ∫_0^T h̃(u) du ) = exp( - A_m (1 - e^{-β T}) )
+                S_T = np.exp(-A_m * (1.0 - np.exp(-beta_h * T_vals)))
+                if horizon == "finite":
+                    S_H = np.exp(-A_m * (1.0 - np.exp(-beta_h * T_h)))
+                else:
+                    S_H = np.exp(-A_m)  # S(∞) by construction
+                logS_T[:, m] = np.log(np.maximum(S_T, tiny))
+                logS_H[m] = np.log(np.maximum(S_H, tiny))
+                continue
+
+            if method == "two_exp":
+                # Two-exponential hazard: h̃(T) = θ1 e^{-β1 T} + θ2 e^{-β2 T}, β2 = ρ β1
+                # Matching constraints at 0:
+                #   θ1 + θ2 = H0
+                #   θ1/β1 + θ2/β2 = A_m
+                #   -θ1 β1 - θ2 β2 = H1
+                # Closed-form β1 from quadratic: ρ A_m β1^2 - H0(ρ+1) β1 - H1 = 0
+                a_q = rho * A_m
+                b_q = -H0 * (rho + 1.0)
+                c_q = -H1
+                disc = b_q * b_q - 4.0 * a_q * c_q
+                # Guard for numerical issues; if fails, fall back to Gompertz
+                if not (np.isfinite(disc) and disc >= 0):
+                    # fallback: Gompertz
+                    beta_h = H0 / A_m
+                    S_T = np.exp(-A_m * (1.0 - np.exp(-beta_h * T_vals)))
+                    S_H = np.exp(-A_m * (1.0 - np.exp(-beta_h * (T_h if horizon == "finite" else 1e12))))
+                    if horizon == "infinite":
+                        S_H = np.exp(-A_m)
+                    logS_T[:, m] = np.log(np.maximum(S_T, tiny))
+                    logS_H[m] = np.log(np.maximum(S_H, tiny))
+                    continue
+
+                beta1 = (-b_q + np.sqrt(disc)) / (2.0 * a_q)
+                if not (np.isfinite(beta1) and beta1 > 0):
+                    # fallback
+                    beta_h = H0 / A_m
+                    S_T = np.exp(-A_m * (1.0 - np.exp(-beta_h * T_vals)))
+                    S_H = np.exp(-A_m) if horizon == "infinite" else np.exp(-A_m * (1.0 - np.exp(-beta_h * T_h)))
+                    logS_T[:, m] = np.log(np.maximum(S_T, tiny))
+                    logS_H[m] = np.log(np.maximum(S_H, tiny))
+                    continue
+
+                beta2 = rho * beta1
+                # θ2 = -(H0 + H1/β1)/(ρ - 1), θ1 = H0 - θ2
+                theta2 = -(H0 + H1 / beta1) / (rho - 1.0)
+                theta1 = H0 - theta2
+
+                # If nonpositive weights, fall back to Gompertz
+                if (theta1 <= 0) or (theta2 <= 0):
+                    beta_h = H0 / A_m
+                    S_T = np.exp(-A_m * (1.0 - np.exp(-beta_h * T_vals)))
+                    S_H = np.exp(-A_m) if horizon == "infinite" else np.exp(-A_m * (1.0 - np.exp(-beta_h * T_h)))
+                    logS_T[:, m] = np.log(np.maximum(S_T, tiny))
+                    logS_H[m] = np.log(np.maximum(S_H, tiny))
+                    continue
+
+                # S̃(T) = exp( -θ1/β1 (1 - e^{-β1 T}) - θ2/β2 (1 - e^{-β2 T}) )
+                part1 = (theta1 / beta1) * (1.0 - np.exp(-beta1 * T_vals))
+                part2 = (theta2 / beta2) * (1.0 - np.exp(-beta2 * T_vals))
+                S_T = np.exp(- (part1 + part2))
+                if horizon == "finite":
+                    S_H = np.exp(- ((theta1 / beta1) * (1.0 - np.exp(-beta1 * T_h))
+                                    + (theta2 / beta2) * (1.0 - np.exp(-beta2 * T_h))))
+                else:
+                    S_H = np.exp(- (theta1 / beta1 + theta2 / beta2))  # equals exp(-A_m)
+                logS_T[:, m] = np.log(np.maximum(S_T, tiny))
+                logS_H[m] = np.log(np.maximum(S_H, tiny))
+                continue
+
+            if method == "gamma_moment":
+                # Hazard-shape surrogate: p̃(T) = exp( -A_m [1 - F_Γ(T; α_H, θ_H)] )
+                # Moment approximation for h(T) uses: h(T) ≈ R_eff Σ f_Γ(a_i + T)
+                # A_m is exact; moments approximate the shape only.
+                # First moment M1 = ∫ T h(T) dT ≈ R_eff Σ E[(τ - a)_+]
+                # Second moment M2 = ∫ T^2 h(T) dT ≈ R_eff Σ E[(τ - a)_+^2]
+                # For τ ~ Gamma(α, θ), with x = a/θ, using regularized upper γ: Q(s,x) = Γ(s,x)/Γ(s) = gammaincc(s, x):
+                x = a / theta
+                Qa = gammaincc(alpha, x)  # P(τ > a)
+                Qa1 = gammaincc(alpha + 1.0, x)  # scaled for E[τ 1_{τ>a}]
+                Qa2 = gammaincc(alpha + 2.0, x)  # scaled for E[τ^2 1_{τ>a}]
+
+                E_tau_gt = theta * alpha * Qa1  # E[τ 1_{τ>a}]
+                E_tau2_gt = (theta ** 2) * alpha * (alpha + 1.0) * Qa2  # E[τ^2 1_{τ>a}]
+
+                E_pos1 = E_tau_gt - a * Qa  # E[(τ - a)_+]
+                E_pos2 = E_tau2_gt - 2.0 * a * E_tau_gt + (a ** 2) * Qa  # E[(τ - a)_+^2]
+
+                M1 = Reff * float(np.sum(E_pos1))
+                M2 = Reff * float(np.sum(E_pos2))
+                # Mean and variance of hazard-shape g(T) = h(T) / A_m
+                mu_H = M1 / A_m if A_m > 0 else 0.0
+                var_H = max(M2 / A_m - mu_H * mu_H, 1e-12)
+
+                # Convert to shape–scale for Gamma: α_H = μ^2/σ^2, θ_H = σ^2/μ
+                alpha_H = max(mu_H * mu_H / var_H, 1e-9)
+                theta_H = max(var_H / max(mu_H, 1e-12), 1e-9)
+
+                # S̃(T) = exp( -A_m [1 - F_Γ(T; α_H, θ_H)] )
+                G_T = gamma.cdf(T_vals, a=alpha_H, scale=theta_H)  # (L,)
+                S_T = np.exp(-A_m * (1.0 - G_T))
+                if horizon == "finite":
+                    G_H = gamma.cdf(T_h, a=alpha_H, scale=theta_H)
+                    S_H = np.exp(-A_m * (1.0 - G_H))
+                else:
+                    S_H = np.exp(-A_m)
+                logS_T[:, m] = np.log(np.maximum(S_T, tiny))
+                logS_H[m] = np.log(np.maximum(S_H, tiny))
+                continue
+
+        # -------- mixture aggregation: ratio of sums across draws --------
+        # p_mix(T) = sum_m S_m(T_h) / sum_m S_m(T) = exp( logsumexp(logS_H) - logsumexp(logS_T, axis=1) )
+        log_num = logsumexp(logS_H)  # scalar
+        log_den = logsumexp(logS_T, axis=1)  # (L,)
+        p_mix = np.exp(log_num - log_den)
+        np.clip(p_mix, 0.0, 1.0, out=p_mix)
+
+        # -------- optional bootstrap bands over draws --------
+        bands: list[tuple[float, np.ndarray, np.ndarray]] = []
+        if conf and bootstrap_samples > 0:
+            rng = np.random.default_rng(random_state)
+            B = bootstrap_samples
+            samples = np.empty((B, L), dtype=float)
+            for b in range(B):
+                idx = rng.integers(0, N, size=N)
+                log_num_b = logsumexp(logS_H[idx])
+                log_den_b = logsumexp(logS_T[:, idx], axis=1)
+                pb = np.exp(log_num_b - log_den_b)
+                np.clip(pb, 0.0, 1.0, out=pb)
+                samples[b, :] = pb
+            for lvl in sorted(conf):
+                qlo = (1 - lvl) * 50.0
+                qhi = 100.0 - qlo
+                lo = np.percentile(samples, qlo, axis=0)
+                hi = np.percentile(samples, qhi, axis=0)
+                bands.append((lvl, lo, hi))
+
+        # -------- colors & plotting --------
+        if colors is None:
+            cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+            main_color = cycle[0]
+            band_palette = cycle[1:] or [cycle[0]]
+            band_colors = [band_palette[i % len(bands)] for i in range(len(bands))]
+        elif isinstance(colors, str):
+            cmap_obj = plt.get_cmap(colors)
+            n = 1 + len(bands)
+            pos = np.linspace(0.15, 0.85, num=n)
+            rgba = [cmap_obj(p) for p in pos]
+            main_color = rgba[0]
+            band_colors = rgba[1:]
+        else:
+            if len(colors) < 1:
+                raise ValueError("colors list must have at least one color.")
+            clist = [mcolors.to_rgba(c) for c in colors]
+            main_color = clist[0]
+            palette = clist[1:] or [clist[0]]
+            band_colors = [palette[i % len(bands)] for i in range(len(bands))]
+
+        for (lvl, lo, hi), c in zip(reversed(bands), reversed(band_colors)):
+            self.ax.fill_between(date_nums, lo, hi, alpha=0.25, color=c, label=f"{int(lvl * 100)}% CI")
+
+        method_label = {
+            "exact": "Exact",
+            "gompertz": "Gompertz",
+            "two_exp": f"Two-exp (ρ={rho:g})",
+            "gamma_moment": "Gamma-moment",
+        }[method]
+        the_label = f"{label} — {method_label} — {horizon}"
+        self.ax.plot(date_nums, p_mix, lw=2, label=the_label, color=main_color)
+
+    # --- analytic plotter matching the style of add_empirical ----------------------
+
+    def add_analytic_parametric(
+            self,
+            parents_times_per_traj: List[Sequence[float]],
+            draws: np.ndarray,  # shape (M,5): [R0, k, r, alpha, theta]
+            color: str = 'C2',
+            marker: str = '',
+            label: str = 'Analytic (parametric; no-peek)',
+            control_date: Optional["datetime"] = None,
+    ) -> None:
+        """
+        Parameter-dependent analytic quiet-window extinction probability using only
+        pre-cutoff information (no peeking past t_max), with **duplicates-encoded M_i**.
+
+        **Input encoding (VERY IMPORTANT):**
+        For trajectory m, `parents_times_per_traj[m]` must contain, for each parent
+        with infection time t_i <= t_max, its infection time **at least once**, plus
+        **one additional duplicate for each observed pre-cutoff child** of that parent.
+        In other words, the multiplicity of a parent's time equals (1 + M_i).
+        If two different parents have exactly the same time value, they will be
+        merged by `np.unique` (rare; ignored as requested).
+
+        Implements the formula
+            P(B | A(T), data_at_tmax, Θ)
+            = ∏_i [ (β + F(a_i + T)) / (β + 1) ]^{k + M_i },  with  β = k / R_post,
+        where i ranges over parents (t_i <= t_max), a_i = t_max - t_i, and
+        F is Gamma CDF with (alpha, theta).
+
+        Parameters
+        ----------
+        parents_times_per_traj : list of sequences
+            Per-trajectory arrays of duplicated parent infection times (days since start_date)
+            as described above. Entries with t > t_max are ignored.
+        draws : np.ndarray (M,5)
+            Rows are [R0, k, r, alpha, theta] for each accepted trajectory.
+            Post-cutoff R_post = R0 * r if controls are active at/ before t_max; else R_post = R0.
+        color / marker / label : plotting style.
+        control_date : datetime or None
+            If provided and cutoff_date < control_date, we take R_post = R0 (controls not yet active).
+            Otherwise R_post = R0 * r.
+
+        Notes
+        -----
+        - This “no-peek” analytic conditions on the quiet window via F(a_i+T) and depends
+          on (R,k,alpha,theta) through β and F. It will generally differ from an empirical
+          estimator that *peeks* at post-cutoff seeds.
+        """
+        # --- validate inputs
+        if draws.ndim != 2 or draws.shape[1] != 5:
+            raise ValueError("draws must be shape (M,5): [R0, k, r, alpha, theta].")
+        M = draws.shape[0]
+        if len(parents_times_per_traj) != M:
+            raise ValueError("parents_times_per_traj length must match draws.shape[0].")
+
+        # --- day grid aligned with empirical routine
+        cutoff_day = (self.cutoff_date - self.start_date).total_seconds() / 86400.0
+        d0 = int(np.floor(cutoff_day))
+        d1 = int(np.floor(self.T_run))
+        if d0 > d1:
+            return
+
+        days = np.arange(d0, d1 + 1, dtype=int)
+        T_grid = days - cutoff_day  # quiet-window length at each plotted day
+
+        dates = [self.start_date + timedelta(days=int(d)) for d in days]
+        date_nums = mdates.date2num(dates)
+
+        # --- unpack draws and choose post-cutoff R
+        R0 = draws[:, 0].astype(float)
+        k_vals = draws[:, 1].astype(float)
+        r_vals = draws[:, 2].astype(float)
+        alpha_vals = draws[:, 3].astype(float)
+        theta_vals = draws[:, 4].astype(float)
+
+        use_controls = (control_date is None) or (self.cutoff_date >= control_date)
+        R_post = (R0 * r_vals) if use_controls else R0
+
+        # β = k / R_post; treat R_post <= 0 ⇒ β = +∞ (factor → 1)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            beta_vals = k_vals / R_post
+        finite_beta = np.isfinite(beta_vals) & (beta_vals > 0.0)
+        log_beta_plus_one = np.empty(M, dtype=float)
+        log_beta_plus_one[finite_beta] = np.log1p(beta_vals[finite_beta])
+
+        # --- build per-trajectory *unique* parents and their (1 + M_i) multiplicities
+        # From duplicates-encoded times (filter to t_i <= t_max)
+        parents_unique_times: List[np.ndarray] = []
+        parents_mults: List[np.ndarray] = []  # multiplicity = 1 + M_i  (≥1 integers)
+        for m in range(M):
+            t_all = np.asarray(parents_times_per_traj[m], dtype=float)
+            if t_all.size == 0:
+                parents_unique_times.append(np.zeros(0, dtype=float))
+                parents_mults.append(np.zeros(0, dtype=float))
+                continue
+            mask = (t_all <= cutoff_day)
+            t_pre = t_all[mask]
+            if t_pre.size == 0:
+                parents_unique_times.append(np.zeros(0, dtype=float))
+                parents_mults.append(np.zeros(0, dtype=float))
+                continue
+            unique_t, counts = np.unique(t_pre, return_counts=True)
+            parents_unique_times.append(unique_t.astype(float))
+            parents_mults.append(counts.astype(float))  # counts = 1 + M_i
+
+        # --- compute the curve (average over trajectories of per-trajectory products)
+        comp = np.empty_like(days, dtype=float)
+
+        for ti, T in enumerate(T_grid):
+            vals = []
+
+            for m in range(M):
+                t_par = parents_unique_times[m]
+                mults = parents_mults[m]  # = 1 + M_i
+                if t_par.size == 0:
+                    vals.append(1.0)
+                    continue
+
+                # If β is not finite or ≤ 0, factor → 1 (for all parents)
+                if not finite_beta[m]:
+                    vals.append(1.0)
+                    continue
+
+                a_i = cutoff_day - t_par  # ages ≥ 0
+                at = np.maximum(a_i + T, 0.0)  # guard negatives
+                F_vec = gamma.cdf(at, a=alpha_vals[m], scale=theta_vals[m])  # vectorized
+
+                beta = beta_vals[m]
+                kval = k_vals[m]
+
+                # exponent per parent: k + M_i = k + (mults - 1)
+                exponents = kval + (mults - 1.0)
+
+                # factor_i = ((β + F_i) / (β + 1))^{exponent_i}
+                # compute in log-space for stability
+                log_num = np.log(beta + F_vec)
+                log_den = log_beta_plus_one[m]  # log(β + 1)
+                log_prod = np.sum(exponents * (log_num - log_den))
+                vals.append(float(np.exp(log_prod)))
+
+            comp[ti] = float(np.median(vals)) if vals else 1.0
+
+        # --- plot
+        self.ax.plot(date_nums, comp, lw=1.7, marker=marker, label=label, color=color)
+        self.ax.set_ylim(0.0, 1.02)
+        # self.ax.set_ylabel("Extinction probability")
+        # self.ax.grid(True)
+        # self.fig.canvas.draw_idle()
 
 
 # noinspection PyPep8Naming
@@ -783,7 +2027,7 @@ def plot_extinction(
         cutoff_date: datetime,
         T_run: int,
         *,
-        analytical: Tuple[np.ndarray | DrawCollector, np.ndarray | ActiveSetSizeCollector],
+        analytical: Tuple[np.ndarray | DrawCollector, list[list[float]] | ActiveSetSizeCollector],
         empirical: Union[np.ndarray, TimeMatrix],
         analytical_colors: Optional[str | Sequence[str]] = ...,
         empirical_color: Optional[str] = ...,
@@ -799,7 +2043,7 @@ def plot_extinction(
         cutoff_date: datetime,
         T_run: int,
         *,
-        analytical: Optional[Tuple[np.ndarray | DrawCollector, np.ndarray | ActiveSetSizeCollector]] = None,
+        analytical: Optional[Tuple[np.ndarray | DrawCollector, list[list[float]] | ActiveSetSizeCollector]] = None,
         empirical: Optional[np.ndarray | TimeMatrix] = None,
         analytical_colors: Optional[str | Sequence[str]] = None,
         empirical_color: Optional[str] = None,
@@ -839,8 +2083,96 @@ def plot_extinction(
     if analytical is not None:
         draws, active_set = analytical
         draws = np.asarray(draws)
-        active_set = np.asarray(active_set)
-        ep.add_analytical(draws, active_set, conf=conf, colors=analytical_colors)
+        active_set = active_set if isinstance(active_set, list) else active_set.active_sets
+
+        # ep.add_analytical(draws, active_set, None, colors=['C4'], label='analytical - ev', method='ev')
+        # ep.add_analytical(draws, active_set, None, colors=['C5'], label='analytical - size_only', method='size_only')
+        # ep.add_analytical3(draws, active_set, None, colors=['C6'], label='analytical3 - ev', method='ev', )
+
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['blue'], label='Analytical (EV)',
+        #                    use_expected_compensation=True)
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['green'], label='Analytical (size-only)',
+        #                    use_expected_compensation=False)
+
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['C5'], label='') # This just seems off.
+
+        # ep.add_analytical_first_after(draws, active_set, conf=None, colors=['C5'], label='Analytical (med inf)',
+        #                               horizon="infinite", aggregate='median')
+
+        # no difference between number of bootstrap_samples.
+        # ep.add_analytical_mixture(draws, active_set, conf=None, colors=['C4'], label='Analytical (0)',
+        #                           bootstrap_samples=0)
+        # ep.add_analytical_mixture(draws, active_set, conf=None, colors=['C5'], label='Analytical (3)',
+        #                           bootstrap_samples=3)
+        # ep.add_analytical_mixture(draws, active_set, conf=None, colors=['C6'], label='Analytical (7)',
+        #                           bootstrap_samples=7)
+        # ep.add_analytical_mixture(draws, active_set, conf=None, colors=['C7'], label='Analytical (15)',
+        #                           bootstrap_samples=15)
+        # ep.add_analytical_mixture(draws, active_set, conf=None, colors=['C8'], label='Analytical (30)',
+        #                           bootstrap_samples=30)
+        # ep.add_analytical_mixture(draws, active_set, conf=None, colors=['C9'], label='Analytical (50)',
+        #                           bootstrap_samples=50)
+
+        # ep.add_analytical_surrogate(draws, active_set, None, ['C4'], method='exact') # same as add_analytical_mixture
+        # ep.add_analytical_surrogate(draws, active_set, None, ['C5'], method='gompertz')
+        # ep.add_analytical_surrogate(draws, active_set, None, ['C6'], method='two_exp', rho=1.5, label="rho 1.5")
+        # ep.add_analytical_surrogate(draws, active_set, None, ['C8'], method='two_exp', rho=3, label='rho 3')
+        # ep.add_analytical_surrogate(draws, active_set, None, ['C9'], method='two_exp', rho=5, label='rho 5')
+        # ep.add_analytical_surrogate(draws, active_set, None, ['C7'], method='gamma_moment')
+
+        # ep.add_analytic_parametric(active_set, draws)
+
+        # --- add_analytical (2 modes) ---
+        # ep.add_analytical(draws, active_set, conf=None, colors=['C0'], label='Analytical — ev', method='ev')
+        # ep.add_analytical(draws, active_set, conf=None, colors=['C1'], label='Analytical — size_only',
+        #                   method='size_only')
+
+        # --- add_analytical3 (6 modes) ---
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['C2'], label='Analytical3 — ev', method='ev')
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['C3'], label='Analytical3 — size_only',
+        #                    method='size_only')
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['C4'], label='Analytical3 — ev_exp', method='ev_exp',
+        #                    lambda_c=0.15)
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['C5'], label='Analytical3 — size_only_exp',
+        #                    method='size_only_exp', lambda_c=0.15)
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['C6'], label='Analytical3 — ev_weibull',
+        #                    method='ev_weibull', weibull_tau=7.0, weibull_nu=1.5)
+        # ep.add_analytical3(draws, active_set, conf=None, colors=['C7'], label='Analytical3 — size_only_weibull',
+        #                    method='size_only_weibull', weibull_tau=7.0, weibull_nu=1.5)
+
+        # --- add_analytical_first_after (4 modes: horizon × aggregate) ---
+        # ep.add_analytical_first_after(draws, active_set, conf=None, colors=['C8'], label='First-after — finite, median',
+        #                               horizon='finite', aggregate='median')
+        # ep.add_analytical_first_after(draws, active_set, conf=None, colors=['C9'],
+        #                               label='First-after — infinite, median', horizon='infinite', aggregate='median')
+        # ep.add_analytical_first_after(draws, active_set, conf=None, colors=['C10'],
+        #                               label='First-after — finite, mean', horizon='finite', aggregate='mean')
+        # ep.add_analytical_first_after(draws, active_set, conf=None, colors=['C11'],
+        #                               label='First-after — infinite, mean', horizon='infinite', aggregate='mean')
+
+        # --- add_analytical_mixture (2 modes: horizon) ---
+        # ep.add_analytical_mixture(draws, active_set, conf=None, colors=['C12'], label='Mixture — finite',
+        #                           horizon='finite', bootstrap_samples=0)
+        # ep.add_analytical_mixture(draws, active_set, conf=None, colors=['C13'], label='Mixture — infinite',
+        #                           horizon='infinite', bootstrap_samples=0)
+
+        # --- add_analytical_surrogate (4 methods, infinite horizon) ---
+        # ep.add_analytical_surrogate(draws, active_set, conf=None, colors=['C14'], label='Surrogate — exact',
+        #                             method='exact', horizon='infinite')
+        # ep.add_analytical_surrogate(draws, active_set, conf=None, colors=['C15'], label='Surrogate — gompertz',
+        #                             method='gompertz', horizon='infinite')
+        # ep.add_analytical_surrogate(draws, active_set, conf=None, colors=['C16'],
+        #                             label='Surrogate — two_exp (ρ=3)', method='two_exp', horizon='infinite', rho=3)
+
+        # --- add_analytic_parametric (no-peek parametric) ---
+        ep.add_analytic_parametric(active_set, draws, color='k', label='No-peek parametric (duplicates)')
+
+        # --- final cosmetics ---
+        ep.ax.set_ylim(0.0, 1.02)
+        ep.ax.set_ylabel("Probability (no further infections)")
+        ep.ax.grid(True, alpha=0.3)
+        ep.ax.legend(ncol=2, fontsize=8, frameon=False)
+        ep.fig.tight_layout()
 
     if empirical is not None:
         empirical = np.asarray(empirical)

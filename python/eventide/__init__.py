@@ -4,6 +4,7 @@ eventide – a Python facade for the C++ branching-process core.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Optional
 
 # noinspection PyUnresolvedReferences
 from ._eventide import PySimulator, CompiledExpression
@@ -45,6 +46,7 @@ class Simulator:
         T_run: Simulation horizon length (days).
         max_cases: Per‑trajectory cap on new cases.
         max_workers: Number of parallel worker threads.
+        min_required: Minimum number of accepted trajectories for early stopping.
     """
     parameters: Parameters
     sampler: Sampler
@@ -54,19 +56,23 @@ class Simulator:
     collectors: list[Collector]
     num_trajectories: int
     chunk_size: int
-    T_run: int
+    T_run: float
     max_cases: int
     max_workers: int
+    min_required: Optional[int] = None
+    accepted: Optional[int] = None
+    processed: Optional[int] = None
 
     def __post_init__(self) -> None:
         """
         Validate inter‐dependent arguments.
         
         Raises:
-            ValueError: If using PreselectedSampler with chunk_size != 1.
+            ValueError: If using PreselectedSampler with chunk_size != 1 when max_trials > 1.
         """
-        if isinstance(self.sampler, PreselectedSampler) and self.chunk_size != 1:
-            raise ValueError('Chunk_size must be 1 when using PreselectedSampler.')
+        if isinstance(self.sampler, PreselectedSampler):
+            if self.sampler.max_trials > 1 and self.chunk_size != 1:
+                raise ValueError('Chunk_size must be 1 when using PreselectedSampler with max_trials > 1.')
 
     def run(self) -> None:
         """
@@ -81,18 +87,22 @@ class Simulator:
         cpp_collectors = [c._get_cpp_collector(self.T_run, self.start_date) for c in self.collectors]
         cpp_criteria = [c._get_cpp_criterion(self.start_date) for c in self.criteria]
 
-        PySimulator(
+        py_sim = PySimulator(
             self.sampler._get_cpp_sampler(),
             self.scenario._get_cpp_scenario(self.start_date),
             cpp_criteria,
             cpp_collectors,
             CompiledExpression(body),
             self.num_trajectories,
+            self.min_required if self.min_required else self.num_trajectories,
             self.chunk_size,
             self.T_run,
             self.max_cases,
             self.max_workers
-        ).run()
+        )
+        py_sim.run()
+        object.__setattr__(self, "accepted", int(py_sim.accepted))
+        object.__setattr__(self, "processed", int(py_sim.processed))
 
     @property
     def end_date(self) -> datetime:
