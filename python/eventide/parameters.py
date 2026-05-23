@@ -64,6 +64,13 @@ class Parameters:
         """List[str]: The added validation expressions."""
         return self._validators
 
+    @property
+    def validator_expression(self) -> str:
+        """str: Combined validator expression for the C++ engine."""
+        if not self._validators:
+            return 'true'
+        return ' and '.join(f'({expr})' for expr in self._validators)
+
     def __iter__(self):
         """Iterate over Parameter objects in canonical order."""
         yield from self._params.values()

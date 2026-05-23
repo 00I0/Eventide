@@ -29,7 +29,7 @@ try:
         Simulator,
         IndexOffspringCriterion,
         Scenario,
-        Parameters
+        Parameters, ParameterChangePoint
     )
 except ImportError:
     print("Warning: python.eventide not found. Ensure it is in your PYTHONPATH.")
@@ -514,7 +514,7 @@ def run_once_and_score(
         sampler=parameters.create_latin_hypercube_sampler(),
         start_date=sim_start,
         scenario=scenario,
-        criteria=criteria + [IndexOffspringCriterion(2, 5)],
+        criteria=criteria + [IndexOffspringCriterion(2, 7)],
         collectors=[infection_times],
         T_run=t_run_dynamic,
         max_cases=15,
@@ -587,9 +587,9 @@ def optimize_snapshots(
     def create_params(init_values: Optional[Dict[str, float]] = None) -> LMParams:
         p = LMParams()
         # Cluster
-        p.add("sigma_days", value=1.0, min=0.25, max=4.0)
+        p.add("sigma_days", value=1.0, min=0.25, max=8.0)
         p.add("beta", value=0.75, min=0.50, max=0.99)
-        p.add("neighbor_weight", value=0.8, min=0.1, max=2.0)
+        p.add("neighbor_weight", value=0.8, min=0.1, max=3.0)
         # Segment
         p.add("grid_step_days", value=0.25, min=0.10, max=0.75)
         p.add("min_seg_days", value=1.0, min=0.5, max=5.0)
@@ -602,7 +602,7 @@ def optimize_snapshots(
         # Cross-window
         p.add("include_gap_windows", value=1.0, min=0.0, max=1.0)
         p.add("include_union_windows", value=1.0, min=0.0, max=1.0)
-        p.add("max_unions_to_keep", value=3.0, min=0.0, max=5.0)
+        p.add("max_unions_to_keep", value=3.0, min=0.0, max=6.0)
         p.add("gap_scale", value=0.40, min=0.10, max=0.90)
         # Global
         p.add("include_global_total", value=1.0, min=0.0, max=1.0)
@@ -688,6 +688,11 @@ def optimize_snapshots(
         print(f"Global Phase finished. Best Obj: {result_global.chisqr:.6f}")
 
         # --- PHASE 2: LOCAL OPTIMIZATION ---
+        if snapshot_config.local_opt is None:
+            print(f"Skipping local optimization for snapshot {n_obs}.")
+            current_best_params = best_global_vals
+            continue
+
         print(f"\n--- Phase 2: Local Optimization ({snapshot_config.local_opt.method}) ---")
         iter_counter = 0
 
@@ -726,34 +731,38 @@ def optimize_snapshots(
 # --- MAIN EXECUTION ---------------------------------------------------------
 def main():
     # 1. Setup Simulation Environment (User defined)
-    scenario = Scenario([])
+    scenario = Scenario([
+        # ParameterChangePoint("r", datetime(2018, 11, 2), "1.0"),
+        # ParameterChangePoint("r", datetime(2019, 1, 1))
+    ])
 
     # Define your Epidemic Parameters
     pars = (
         Parameters(
-            R0=(0.25, 15),
-            k=(0.2, 10),
+            R0=(0.0, 7.5),
+            k=(0.2, 40.0),
             r=(0.01, 0.99),
-            alpha=(0.01, 20),
-            theta=(0.01, 40)
-        ).require('R0 * r < 3')
-        .require('1 < alpha * theta').require('alpha * theta < 28')
-        .require('sqrt(alpha) * theta < 21')
-        .require('R0 / k < 1.2').require('R0 * r / k < 0.4')
-        .require('(k / (k + R0 * r)) ^ k > 0.05').require('(k / (k + R0 * r)) ^ k < 0.95')
-        .require('((R0 * r) ^ (1 / alpha) - 1) / theta < 0.10')
+            alpha=(0.01, 30),
+            theta=(0.01, 20)
+        ).require('R0 * r < 2.5')
+        .require('3 < alpha * theta').require('alpha * theta < 40')
+        .require('(k / (k + R0)) ^ k > 0.25')
+        .require('(k / (k + R0 * r)) ^ k > 0.35')
+        .require('((R0 * r) ^ (1 / alpha) - 1) / theta < 0.05')
     )
 
     # 2. Define Observations
     obs_points = [
-        (datetime(2025, 3, 3), 1),
-        (datetime(2025, 3, 20), 3),
-        (datetime(2025, 3, 24), 1),
-        (datetime(2025, 3, 25), 1),
-        (datetime(2025, 3, 30), 1),
-        (datetime(2025, 4, 1), 2),
-        (datetime(2025, 4, 4), 1),
-        (datetime(2025, 4, 17), 1),
+        (datetime(2026, 4, 6), 1),  # Case 1 (Index Case)
+        (datetime(2026, 4, 24), 2),  # Case 2 and Case 3
+        (datetime(2026, 4, 27), 1),  # Case 6 (Crew/Guide)
+        (datetime(2026, 4, 28), 2),  # Case 4 and Case 8
+        (datetime(2026, 4, 30), 1),  # Case 5 (Ship Doctor)
+        (datetime(2026, 5, 1), 1),  # Case 7 (Disembarked early, onset in Switzerland)
+        (datetime(2026, 5, 11), 1),  # Case 10
+        (datetime(2026, 5, 12), 1),  # Case 9
+        (datetime(2026, 5, 14), 1),  # Case 11
+        (datetime(2026, 5, 17), 1),  # Case 12
     ]
 
     sim_start = obs_points[0][0]
@@ -762,15 +771,15 @@ def main():
 
     config = SnapshotConfig(
         # Which prefixes of data to optimize on?
-        counts=list(range(1, len(obs_points) + 1)),
-
+        # counts=list(range(1, len(obs_points) + 1)),
+        counts=(10,),
         # Global Optimizer Settings
         # 'differential_evolution', 'shgo', 'dual_annealing', 'basinhopping'
         global_opt=OptimizerConfig(
             method='differential_evolution',
             kwargs={
                 'strategy': 'best1bin',  # Standard robust strategy
-                'max_nfev': 10_000,  # Cap the cost
+                'max_nfev': 500,  # Cap the cost
                 'popsize': 10,  # Smaller population = faster (10 is usually enough for 10-12 params)
                 'workers': 1,  # KEEP AS 1. Let the simulation handle parallelism.
                 'polish': False  # We do this manually in the next step
@@ -779,13 +788,14 @@ def main():
 
         # Local Optimizer Settings
         # 'nelder', 'powell', 'lbfgsb', 'cobyla'
-        local_opt=OptimizerConfig(
-            method='nelder',
-            kwargs={
-                'max_nfev': 2000,
-                'options': {'fatol': 0.01, 'xatol': 0.01}
-            }
-        )
+        # local_opt=OptimizerConfig(
+        #     method='nelder',
+        #     kwargs={
+        #         'max_nfev': 2000,
+        #         'options': {'fatol': 0.01, 'xatol': 0.01}
+        #     }
+        # )
+        local_opt=None
     )
 
     # 4. Run Logic
@@ -795,7 +805,7 @@ def main():
         base_parameters=pars,
         base_scenario=scenario,
         snapshot_config=config,
-        base_log_path=str(REPO_ROOT / "optimization_logs" / "run_99")
+        base_log_path=str(REPO_ROOT / "optimization_logs" / "run_hanta_ship")
     )
 
     print("\n" + "=" * 60)

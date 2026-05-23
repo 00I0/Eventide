@@ -874,6 +874,7 @@ def plot_rb_online_right_pane_hu(
         ylim: Tuple[float, float] = (0.0, 1.05),
         figsize: Tuple[float, float] = (5.04, 3.1248),
         final_horizon_days: float = 20.0,
+        end_date: Optional[datetime] = None,
         axis_start_date: Optional[datetime] = None,
         save_path: Optional[Path] = None,
 ) -> None:
@@ -899,10 +900,13 @@ def plot_rb_online_right_pane_hu(
 
     fig, ax = plt.subplots(1, 1, figsize=figsize)
 
-    max_days = max(
-        float(res.t_star) + (float(res.next_T) if res.next_T is not None else final_horizon_days)
-        for res in ordered_results
-    )
+    if end_date is not None:
+        max_days = (end_date - start_date).total_seconds() / 86400.0
+    else:
+        max_days = max(
+            float(res.t_star) + (float(res.next_T) if res.next_T is not None else final_horizon_days)
+            for res in ordered_results
+        )
 
     for i, res in enumerate(ordered_results):
         y_vals = np.asarray(res.p_cond_mean, dtype=float)
@@ -912,37 +916,51 @@ def plot_rb_online_right_pane_hu(
         if y_vals.size == 0 or x_vals.size == 0:
             continue
 
+        visible = x_vals <= max_days
+        if not np.any(visible):
+            continue
+
+        x_visible = x_vals[visible]
+        y_visible = y_vals[visible]
+
         if res.next_T is not None:
             x_event = snapshot_day + float(res.next_T)
-            y_event = float(np.interp(res.next_T, res.T_grid, y_vals))
-            date_event = start_date + timedelta(days=x_event)
+            x_pre = x_visible[x_visible < x_event]
+            y_pre = y_visible[x_visible < x_event]
 
-            # Solid curve up to segment end.
-            x_pre = np.append(x_vals[x_vals < x_event], x_event)
-            y_pre = np.append(y_vals[x_vals < x_event], y_event)
-            dates_pre = [start_date + timedelta(days=float(x)) for x in x_pre]
-            ax.plot(dates_pre, y_pre, color=colors[i], lw=1.8, linestyle="-", alpha=0.9, zorder=10 - i)
+            if x_event <= max_days:
+                y_event = float(np.interp(res.next_T, res.T_grid, y_vals))
+                date_event = start_date + timedelta(days=x_event)
+                x_pre = np.append(x_pre, x_event)
+                y_pre = np.append(y_pre, y_event)
 
-            # Dashed continuation after the segment end.
-            x_post = np.concatenate(([x_event], x_vals[x_vals > x_event]))
-            y_post = np.concatenate(([y_event], y_vals[x_vals > x_event]))
-            if x_post.size >= 2:
-                dates_post = [start_date + timedelta(days=float(x)) for x in x_post]
-                ax.plot(
-                    dates_post,
-                    y_post,
-                    color=colors[i],
-                    lw=1.2,
-                    linestyle=(0, (2, 0.5)),
-                    dash_capstyle="butt",
-                    alpha=1.0,
-                    zorder=10 - i,
-                )
+            if x_pre.size >= 2:
+                dates_pre = [start_date + timedelta(days=float(x)) for x in x_pre]
+                ax.plot(dates_pre, y_pre, color=colors[i], lw=1.8, linestyle="-", alpha=0.9, zorder=10 - i)
 
-            ax.scatter([date_event], [y_event], s=23, facecolors="white", edgecolors=colors[i], lw=1.5, zorder=20)
+            if x_event <= max_days:
+                x_post = x_visible[x_visible > x_event]
+                y_post = y_visible[x_visible > x_event]
+                x_post = np.concatenate(([x_event], x_post))
+                y_post = np.concatenate(([y_event], y_post))
+                if x_post.size >= 2:
+                    dates_post = [start_date + timedelta(days=float(x)) for x in x_post]
+                    ax.plot(
+                        dates_post,
+                        y_post,
+                        color=colors[i],
+                        lw=1.2,
+                        linestyle=(0, (2, 0.5)),
+                        dash_capstyle="butt",
+                        alpha=1.0,
+                        zorder=10 - i,
+                    )
+
+                ax.scatter([date_event], [y_event], s=23, facecolors="white", edgecolors=colors[i], lw=1.5, zorder=20)
         else:
-            dates = [start_date + timedelta(days=float(x)) for x in x_vals]
-            ax.plot(dates, y_vals, color=colors[i], lw=1.8, alpha=0.9, zorder=10 - i)
+            if x_visible.size >= 2:
+                dates = [start_date + timedelta(days=float(x)) for x in x_visible]
+                ax.plot(dates, y_visible, color=colors[i], lw=1.8, alpha=0.9, zorder=10 - i)
 
     legend_lines = [plt.Line2D([0], [0], color=c, lw=2) for c in colors]
     legend_labels = [f"$N={res.n_obs}$" for res in ordered_results]
@@ -1220,6 +1238,16 @@ def run_baseline_driver(
     acceptance_save_path = _derive_secondary_save_path(save_path, "acceptance_ratio")
     rb_right_pane_save_path = _derive_secondary_save_path(save_path, "rb_right_pane")
 
+    plot_rb_online_right_pane_hu(
+        results=results,
+        start_date=start_date,
+        final_horizon_days=final_horizon_days,
+        axis_start_date=obs_dates[2],
+        end_date=datetime(2025, 5, 22)
+        # save_path=rb_right_pane_save_path,
+    )
+    exit()
+
     plot_timepath_re_growth_alpha_theta_p0_hu(
         results=results,
         start_date=start_date,
@@ -1237,22 +1265,15 @@ def run_baseline_driver(
         axis_start_date=obs_dates[0],
         # save_path=acceptance_save_path,
     )
-    plot_rb_online_right_pane_hu(
-        results=results,
-        start_date=start_date,
-        final_horizon_days=final_horizon_days,
-        axis_start_date=obs_dates[2],
-        # save_path=rb_right_pane_save_path,
-    )
 
-    plot_timepath_weighted_re_growth_alpha_theta_p0_hu(
-        results=results,
-        start_date=start_date,
-        step=step,
-        final_horizon_days=final_horizon_days,
-        sigma=2.0,  # smoothing width in days
-        perc_bands=perc_bands,
-    )
+    # plot_timepath_weighted_re_growth_alpha_theta_p0_hu(
+    #     results=results,
+    #     start_date=start_date,
+    #     step=step,
+    #     final_horizon_days=final_horizon_days,
+    #     sigma=2.0,  # smoothing width in days
+    #     perc_bands=perc_bands,
+    # )
 
 
 if __name__ == "__main__":

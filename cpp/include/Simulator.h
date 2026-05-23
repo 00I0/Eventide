@@ -65,7 +65,7 @@ namespace eventide {
         std::atomic<int64_t> numAccepted_{0};
         int64_t numProcessedTrajectories_{0};
 
-        using EventHeap = DaryHeap<2>;
+        using EventHeap = DaryHeap<>;
 
         bool
         simulateSegment(EventHeap& heap, int& cases, const Draw& draw, RngEngine& rng, CriterionGroup& criterionGroup,

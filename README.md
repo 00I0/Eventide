@@ -6,6 +6,8 @@ Eventide is a branching-process simulation project with:
 - A `pybind11` extension module (`bindings/`)
 - Python analysis and plotting workflows (`python/`)
 
+Recent updates: added support for alternating case and introduced `synthetic.py`.
+
 The top-level CMake build compiles the C++ core, builds the Python extension (`_eventide`), and installs the Python package in editable mode.
 
 ## Repository Layout

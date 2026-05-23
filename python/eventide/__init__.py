@@ -7,8 +7,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 # noinspection PyUnresolvedReferences
-from ._eventide import PySimulator, CompiledExpression
+from ._eventide import PySimulator, CompiledExpression, Species
 # ---- pure-python helpers -------------------------------------------------
+from .alternating import AlternatingSimulator, SpeciesConfiguration
 from .collectors import Histogram, Hist1D, Hist2D, TimeMatrix, Collector, ActiveSetSizeCollector, \
     InfectionTimeCollector, DrawCollector
 from .criterion import IntervalCriterion, IndexOffspringCriterion, Criterion
@@ -22,6 +23,7 @@ __all__ = [
     'IndexOffspringCriterion', 'IntervalCriterion',
     'LatinHypercubeSampler', 'PreselectedSampler',
     'Parameters',
+    'Species', 'SpeciesConfiguration', 'AlternatingSimulator',
     'Histogram', 'Hist1D', 'Hist2D', 'Simulator', 'TimeMatrix', 'ActiveSetSizeCollector', 'InfectionTimeCollector',
     'DrawCollector'
 ]
@@ -81,9 +83,6 @@ class Simulator:
         Collectors passed into this object will be populated with results
         when this method returns.
         """
-        validators = self.parameters.validators or []
-        body = ' and '.join(f'({expr})' for expr in validators) if validators else 'true'
-
         cpp_collectors = [c._get_cpp_collector(self.T_run, self.start_date) for c in self.collectors]
         cpp_criteria = [c._get_cpp_criterion(self.start_date) for c in self.criteria]
 
@@ -92,7 +91,7 @@ class Simulator:
             self.scenario._get_cpp_scenario(self.start_date),
             cpp_criteria,
             cpp_collectors,
-            CompiledExpression(body),
+            CompiledExpression(self.parameters.validator_expression),
             self.num_trajectories,
             self.min_required if self.min_required else self.num_trajectories,
             self.chunk_size,

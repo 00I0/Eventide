@@ -30,17 +30,17 @@ class Parameter:
     @property
     def name(self) -> str:
         """str: The name of the parameter."""
-        return self._cpp_parameter.name()
+        return self._cpp_parameter.name
 
     @property
     def min(self) -> float:
         """float: The minimum value of the parameter."""
-        return self._cpp_parameter.min()
+        return self._cpp_parameter.min
 
     @property
     def max(self) -> float:
         """float: The maximum value of the parameter."""
-        return self._cpp_parameter.max()
+        return self._cpp_parameter.max
 
     @property
     def cpp_parameter(self):

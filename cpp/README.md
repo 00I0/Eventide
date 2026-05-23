@@ -2,6 +2,8 @@
 
 This directory contains the C++17 simulation engine used by the Python package.
 
+Recent updates: added support for alternating case and introduced `synthetic.py`.
+
 ## Contents
 
 - `include/`: public headers (`Simulator`, `Sampler`, `Scenario`, `Criterion`, `Collector`, etc.)

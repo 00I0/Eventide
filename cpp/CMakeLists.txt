@@ -8,12 +8,13 @@ include(FetchContent)
 FetchContent_Declare(
         exprtk
         GIT_REPOSITORY https://github.com/ArashPartow/exprtk.git
-        GIT_TAG f46bffcd6966d38a09023fb37ba9335214c9b959           # or pin to a release tag/commit
+        #        GIT_TAG f46bffcd6966d38a09023fb37ba9335214c9b959           # or pin to a release tag/commit
 )
 FetchContent_MakeAvailable(exprtk)
 
 
 add_library(eventide_core
+        src/AlternatingSimulator.cpp
         src/Sampler.cpp
         src/Scenario.cpp
         src/Criterion.cpp
@@ -34,6 +35,15 @@ target_compile_options(eventide_core PRIVATE
         $<$<CONFIG:Release>:-Ofast -march=native -flto -funroll-loops -DNDEBUG>
         $<$<CONFIG:RelWithDebInfo>:-O2 -g -pg>
         $<$<CONFIG:Debug>:-O0 -g>
+        $<$<CONFIG:Fast>:
+        -O3
+        -ffast-math
+        -DNDEBUG
+        -flto
+        -funroll-loops
+        -fomit-frame-pointer
+        -mcpu=native
+        >
 )
 
 # C++ unit tests

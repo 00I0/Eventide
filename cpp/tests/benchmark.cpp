@@ -34,9 +34,14 @@ double run_simulator() {
         Parameter("theta", 0.01, 20)
     };
 
-    CompiledExpression validator("(R0 * r < 3) and (3 < alpha * theta) and (alpha * theta < 20) "
-        "and (1/sqrt(alpha) >= 0.1) and (1/sqrt(alpha) <= 0.9) and (1 <= sqrt(alpha) * theta)"
-        "and (sqrt(alpha) * theta <= 15)");
+
+    CompiledExpression validator("(R0 * r < 3) "
+        "and (1 < alpha * theta) and (alpha * theta < 28) "
+        "and (R0 / k < 1.2) and (R0 * r / k < 0.4)"
+        "and ((k / (k + R0 * r)) ^ k > 0.05) and ((k / (k + R0 * r)) ^ k < 0.95)"
+        "and ((R0 * r) ^ (1 / alpha) - 1) / theta < 0.1000001"
+        "and (sqrt(alpha) * theta <= 21)"
+    );
 
     RngEngine rng;
     LatinHypercubeSampler sampler(params, rng, true);
@@ -47,15 +52,22 @@ double run_simulator() {
     // --- 3) Acceptance criteria ---
     std::vector<std::unique_ptr<Criterion>> criteria;
     criteria.emplace_back(std::make_unique<OffspringCriterion>(2, 5));
-    criteria.emplace_back(std::make_unique<IntervalCriterion>(0.0, 29.0, 9, 11));
-    criteria.emplace_back(std::make_unique<IntervalCriterion>(29.0, 32.0, 1, 1));
-    criteria.emplace_back(std::make_unique<IntervalCriterion>(32.0, 42.0, 0, 0));
-    criteria.emplace_back(std::make_unique<IntervalCriterion>(42.0, 45.0, 1, 1));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(0.0, 7.7839, 0, 2)));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(0.0, 45.0, 8, 12)));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(7.7839, 19.7480, 2, 4)));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(19.7480, 22.9193, 1, 3)));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(22.9193, 26.5229, 0, 1)));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(26.5229, 29.6942, 2, 3)));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(29.6942, 32.8654, 1, 2)));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(32.8654, 39.2079, 0, 1)));
+    criteria.emplace_back(std::make_unique<IntervalCriterion>(IntervalCriterion(39.2079, 44.9737, 0, 0)));
+
+
     CriterionGroup critGroup(std::move(criteria));
 
     // --- 4) Data collectors ---
-    int T_run = 60;
-    int N_TRAJ = 10'000'000;
+    int T_run = 55;
+    int N_TRAJ = 1'000'000'000;
     int minReq = 2000;
 
     auto tm_col = std::make_shared<InfectionTimeCollector>();
@@ -86,7 +98,7 @@ double run_simulator() {
 }
 
 int main() {
-    constexpr int REPEATS = 1000;
+    constexpr int REPEATS = 10;
     std::vector<double> runtimes;
     for (int i = 0; i < REPEATS; ++i) {
         std::cout << "\t" << i << "\t";

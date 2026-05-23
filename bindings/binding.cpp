@@ -1,6 +1,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <algorithm>
+#include <cctype>
+
+#include "AlternatingSimulator.h"
 #include "Parameter.h"
 #include "Sampler.h"
 #include "Scenario.h"
@@ -31,6 +35,13 @@ static DrawID name_to_id(const std::string& name) {
 
 
 namespace eventide {
+     static void merge_collectors(const DataCollectorGroup& collectors,
+                                 const std::vector<std::shared_ptr<DataCollector>>& originals) {
+          const size_t n = std::min(collectors.size(), originals.size());
+          for (size_t i = 0; i < n; ++i)
+               originals[i]->merge(*collectors.at(i));
+     }
+
      struct PySimulator {
           std::unique_ptr<Simulator> core;
           std::vector<std::shared_ptr<DataCollector>> originals; // borrowed, Python-side
@@ -60,10 +71,61 @@ namespace eventide {
 
           void run() const {
                core->run();
-               auto& collectors = core->collectors(); // DataCollectorGroup
-               const size_t n = std::min(collectors.size(), originals.size());
-               for (size_t i = 0; i < n; ++i)
-                    originals[i]->merge(*collectors.at(i));
+               merge_collectors(core->collectors(), originals);
+          }
+
+          int64_t accepted() const {
+               return core->acceptedCount();
+          }
+
+          int64_t processed() const {
+               return core->processedCount();
+          }
+     };
+
+     struct PyAlternatingSimulator {
+          std::unique_ptr<AlternatingSimulator> core;
+          std::vector<std::shared_ptr<DataCollector>> hostOriginals;
+          std::vector<std::shared_ptr<DataCollector>> vectorOriginals;
+
+          PyAlternatingSimulator(const std::shared_ptr<Sampler>& hostSampler,
+                                 const std::shared_ptr<Sampler>& vectorSampler,
+                                 const std::shared_ptr<Scenario>& hostScenario,
+                                 const std::shared_ptr<Scenario>& vectorScenario,
+                                 const std::vector<std::shared_ptr<Criterion>>& hostCriteria,
+                                 const std::vector<std::shared_ptr<Criterion>>& vectorCriteria,
+                                 const std::vector<std::shared_ptr<DataCollector>>& hostCollectors,
+                                 const std::vector<std::shared_ptr<DataCollector>>& vectorCollectors,
+                                 CompiledExpression hostValidator,
+                                 CompiledExpression vectorValidator,
+                                 int64_t numT,
+                                 int64_t minReq,
+                                 int chunk,
+                                 double Tr,
+                                 int maxC,
+                                 int workers,
+                                 Species rootSpecies)
+               : hostOriginals(hostCollectors), vectorOriginals(vectorCollectors) {
+               CriterionGroup hostCritGroup(hostCriteria);
+               CriterionGroup vectorCritGroup(vectorCriteria);
+               DataCollectorGroup hostCollGroup(hostOriginals);
+               DataCollectorGroup vectorCollGroup(vectorOriginals);
+
+               core = std::make_unique<AlternatingSimulator>(
+                    *hostSampler, *vectorSampler,
+                    *hostScenario, *vectorScenario,
+                    hostCritGroup, vectorCritGroup,
+                    hostCollGroup, vectorCollGroup,
+                    numT, minReq, chunk, Tr, maxC, workers,
+                    hostValidator, vectorValidator,
+                    rootSpecies
+               );
+          }
+
+          void run() const {
+               core->run();
+               merge_collectors(core->hostCollectors(), hostOriginals);
+               merge_collectors(core->vectorCollectors(), vectorOriginals);
           }
 
           int64_t accepted() const {
@@ -94,6 +156,10 @@ PYBIND11_MODULE(_eventide, m) {
 
      py::class_<CompiledExpression>(m, "CompiledExpression")
           .def(py::init<std::string>());
+
+     py::enum_<Species>(m, "Species")
+          .value("HOST", Species::HOST)
+          .value("VECTOR", Species::VECTOR);
 
 
      py::class_<Sampler, std::shared_ptr<Sampler>>(m, "Draw");
@@ -243,4 +309,49 @@ PYBIND11_MODULE(_eventide, m) {
           .def("run", &PySimulator::run)
           .def_property_readonly("accepted", &PySimulator::accepted)
           .def_property_readonly("processed", &PySimulator::processed);
+
+     py::class_<PyAlternatingSimulator, std::shared_ptr<PyAlternatingSimulator>>(m, "PyAlternatingSimulator")
+          .def(py::init<
+                    std::shared_ptr<Sampler>,
+                    std::shared_ptr<Sampler>,
+                    std::shared_ptr<Scenario>,
+                    std::shared_ptr<Scenario>,
+                    std::vector<std::shared_ptr<Criterion>>,
+                    std::vector<std::shared_ptr<Criterion>>,
+                    std::vector<std::shared_ptr<DataCollector>>,
+                    std::vector<std::shared_ptr<DataCollector>>,
+                    CompiledExpression,
+                    CompiledExpression,
+                    int64_t, int64_t, int, double, int, int,
+                    Species
+               >(),
+               py::arg("host_sampler"),
+               py::arg("vector_sampler"),
+               py::arg("host_scenario"),
+               py::arg("vector_scenario"),
+               py::arg("host_criteria"),
+               py::arg("vector_criteria"),
+               py::arg("host_collectors"),
+               py::arg("vector_collectors"),
+               py::arg("host_validator"),
+               py::arg("vector_validator"),
+               py::arg("num_trajectories"),
+               py::arg("min_required"),
+               py::arg("chunk_size"),
+               py::arg("T_run"),
+               py::arg("max_cases"),
+               py::arg("max_workers"),
+               py::arg("root_species") = Species::HOST,
+               py::keep_alive<1, 2>(),
+               py::keep_alive<1, 3>(),
+               py::keep_alive<1, 4>(),
+               py::keep_alive<1, 5>(),
+               py::keep_alive<1, 6>(),
+               py::keep_alive<1, 7>(),
+               py::keep_alive<1, 8>(),
+               py::keep_alive<1, 9>()
+          )
+          .def("run", &PyAlternatingSimulator::run)
+          .def_property_readonly("accepted", &PyAlternatingSimulator::accepted)
+          .def_property_readonly("processed", &PyAlternatingSimulator::processed);
 }

@@ -5,6 +5,8 @@ This directory contains:
 - The Python package wrapping the C++ extension (`eventide/`)
 - Analysis and plotting scripts for epidemic case studies
 
+Recent updates: added support for alternating case and introduced `synthetic.py`.
+
 ## Structure
 
 - `eventide/`: installable package (`setup.py`, wrappers, collectors, criteria, samplers)

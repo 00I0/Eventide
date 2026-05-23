@@ -322,6 +322,8 @@ class SnapshotResult:
     m: Optional[int] = None
     t_star: Optional[float] = None
     T_grid: Optional[np.ndarray] = None
+    horizon_days_from_start: Optional[float] = None
+    acceptance_horizon_days_from_start: Optional[float] = None
     p_uncond_mean: Optional[np.ndarray] = None
     p_cond_mean: Optional[np.ndarray] = None
     p_uncond_draws: Optional[np.ndarray] = None  # (M_accept, nT)

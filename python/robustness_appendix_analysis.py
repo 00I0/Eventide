@@ -11,36 +11,57 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import gaussian_kde
 
-from python.eventide import Parameters
-from python.presentationplots import run_all_snapshots_per_m
+from python.eventide import (
+    ActiveSetSizeCollector,
+    DrawCollector,
+    IndexOffspringCriterion,
+    InfectionTimeCollector,
+    ParameterChangePoint,
+    Parameters,
+    Scenario,
+    Simulator,
+)
+from python.on_the_fly import (
+    rb_cond_components_post,
+    rb_draws_cond_from_components,
+    rb_draws_uncond_full_to_grid,
+    rao_blackwell_uncond_over_post_full,
+)
+from python.optimize_acceptance_windows import build_acceptance_inequalities
+from python.plots.misc import SnapshotResult
 
 # ============================================================
 # Configuration
 # ============================================================
 
 OBS_POINTS: List[Tuple[datetime, int]] = [
-    (datetime(2025, 3, 3), 1),
-    (datetime(2025, 3, 20), 3),
-    (datetime(2025, 3, 24), 1),
-    (datetime(2025, 3, 25), 1),
-    (datetime(2025, 3, 30), 1),
-    (datetime(2025, 4, 1), 2),
-    (datetime(2025, 4, 4), 1),
-    (datetime(2025, 4, 17), 1),
+    (datetime(2018, 11, 2), 1),
+    (datetime(2018, 11, 22), 2),
+    (datetime(2018, 11, 28), 3),
+    (datetime(2018, 12, 5), 4),
+    (datetime(2018, 12, 11), 5),
+    (datetime(2018, 12, 18), 6),
+    (datetime(2018, 12, 26), 5),
+    (datetime(2019, 1, 3), 4),
+    (datetime(2019, 1, 10), 2),
+    (datetime(2019, 1, 18), 1),
+    (datetime(2019, 1, 25), 1),
 ]
 
 SNAPSHOT_ID = len(OBS_POINTS)  # only the final snapshot is used here
-T_GRID = np.arange(0.0, 70.0 + 1e-9, 1.0)
+
 T_RUN = (OBS_POINTS[-1][0] - OBS_POINTS[0][0]).days + 40
-MAX_CASES = 1000
+T_GRID = np.arange(0.0, 40.0 + 1e-9, 0.5)
+MAX_CASES = 100
 MAX_WORKERS = 13
-NUM_TRAJECTORIES = 10_000_000_000
+NUM_TRAJECTORIES = 1_000_000_000_000_000
 CHUNK_SIZE = 50_000
-MIN_REQUIRED = 100_000
+MIN_REQUIRED = 1_000
 H = 0.2
 H_PAD = 10.0
+CONTROL_START = datetime(2019, 1, 1)
 
-OUTPUT_DIR = Path("robustness_outputs/wider")
+OUTPUT_DIR = Path("robustness_outputs/hanta2")
 
 COLORS = {
     "baseline": "#111111",
@@ -52,23 +73,20 @@ COLORS = {
 }
 
 BASELINE_PRIORS: Dict[str, Tuple[float, float]] = {
-    "R0": (0.25, 15.0),
-    "k": (0.2, 10.0),
+    "R0": (0.0, 7.5),
+    "k": (0.2, 30.0),
     "r": (0.01, 0.99),
-    "alpha": (0.01, 20.0),
+    "alpha": (0.01, 30.0),
     "theta": (0.01, 20.0),
 }
 
 BASELINE_REQUIREMENTS: List[str] = [
     "R0 * r < 3",
-    "alpha * theta > 1",
-    "alpha * theta < 28",
-    "sqrt(alpha) * theta < 21",
-    "R0 / k < 1.2",
-    "R0 * r / k < 0.4",
-    "(k / (k + R0 * r)) ^ k > 0.05",
-    "(k / (k + R0 * r)) ^ k < 0.95",
-    "((R0 * r) ^ (1 / alpha) - 1) / theta < 0.1000001",
+    "alpha * theta > 15",
+    "alpha * theta < 60",
+    "(k / (k + R0)) ^ k > 0.25",
+    "(k / (k + R0 * r)) ^ k > 0.35",
+    "((R0 * r) ^ (1 / alpha) - 1) / theta < 0.05",
 ]
 
 OPTIMIZER_OUTPUT_FIELDS: Tuple[str, ...] = (
@@ -93,7 +111,17 @@ OPTIMIZER_OUTPUT_FIELDS: Tuple[str, ...] = (
 
 
 def _builder_kwargs_from_optimizer_row(row: Sequence[Any]) -> Dict[str, Any]:
-    values = dict(zip(OPTIMIZER_OUTPUT_FIELDS, row))
+    if len(row) == len(OPTIMIZER_OUTPUT_FIELDS):
+        values = dict(zip(OPTIMIZER_OUTPUT_FIELDS, row))
+    elif len(row) == len(OPTIMIZER_OUTPUT_FIELDS) - 2:
+        # Allow rows that contain only the acceptance-kwargs payload and omit
+        # the leading objective / accepted columns.
+        values = dict(zip(OPTIMIZER_OUTPUT_FIELDS[2:], row))
+    else:
+        raise ValueError(
+            f"Unexpected optimizer row length {len(row)}; expected "
+            f"{len(OPTIMIZER_OUTPUT_FIELDS)} or {len(OPTIMIZER_OUTPUT_FIELDS) - 2}."
+        )
     return {
         "sigma_days": float(values["sigma_days"]),
         "beta": float(values["beta"]),
@@ -114,47 +142,60 @@ def _builder_kwargs_from_optimizer_row(row: Sequence[Any]) -> Dict[str, Any]:
 
 
 SNAPSHOT_BUILDER_KWARGS_BY_M: Dict[int, Dict[str, Any]] = {
+    1: _builder_kwargs_from_optimizer_row((
+        3.876986677334013, 0.8536521235132486, 0.640374898332219, 0.10599357413613672, 0.7285707803290452, 2,
+        0.1843105102607828, 0.39988138399181644, 0.4231284739255994, 0.09178407307432239, True, False, 0,
+        0.8016084430512683, False,
+    )),
     2: _builder_kwargs_from_optimizer_row((
-        0.9166777665299166, 1096, 3.560629492439764, 0.9165556050477143,
-        1.8915285540334832, 0.7267176568430085, 1.717070251810136, 4,
-        0.29516706550398103, 0.028281633097020226, 0.9337627627667289,
-        0.08115225556477734, False, False, 2, 0.26025006460782724, True,
+        1.8445791914323304, 0.8816601601104272, 1.2102294660275816, 0.43546831487101323, 3.1987225675922053, 6,
+        0.28376740693924385, 0.09799519411618896, 0.8185162430576272, 0.06512535606974085, True, True, 0,
+        0.10186318097771685, True,
     )),
     3: _builder_kwargs_from_optimizer_row((
-        8.451749192286408e-06, 1208, 3.4187995828665247, 0.9896303631936443,
-        1.2076626408376723, 0.4678862440005449, 2.026628423472655, 2,
-        0.01421393782310388, 0.23993633390721417, 0.9076538587141828,
-        0.03841340458755684, True, True, 1, 0.5757757261504524, True,
+        7.81309491615046, 0.9578135534988547, 1.8279768796531257, 0.16046667759248917, 4.966058815762482, 2,
+        0.06865373864095785, 0.010554750277145204, 0.1367819342609044, 0.07117480127990024, False, True, 6,
+        0.8705002095780249, False,
     )),
     4: _builder_kwargs_from_optimizer_row((
-        0.018818815963245767, 1034, 1.1127413689295036, 0.9544306881958414,
-        0.5556844527601166, 0.5019387818782794, 2.936911791559849, 6,
-        0.01929277142215318, 0.19253485020215647, 0.1762726629096525,
-        0.011677772322578052, False, False, 2, 0.4519753290811037, True,
+        7.230142046451505, 0.5000307517236018, 2.034541151376431, 0.31096993492248015, 4.678181054040574, 2,
+        0.1763631488167721, 0.04982099599959151, 0.10022453373717369, 0.0005548428848050443, False, True, 3,
+        0.8919467963913615, True,
     )),
     5: _builder_kwargs_from_optimizer_row((
-        0.00644229223637123, 1007, 3.1135184694755447, 0.9517200010412159,
-        0.15165833901407044, 0.6582490774910539, 0.5069494403122924, 8,
-        0.010669414387185897, 0.1856108108513783, 0.1550339673446746,
-        0.024264566525186406, False, True, 4, 0.1970643975353021, False,
+        5.896779157840167, 0.8894045810357124, 2.8366104994965755, 0.7448871585883066, 1.609828560076077, 3,
+        0.048728197753616934, 0.09354187205294318, 0.28584425154799786, 0.03407536361980045, True, True, 3,
+        0.11185380746783324, False,
     )),
     6: _builder_kwargs_from_optimizer_row((
-        0.041300712028638574, 1008, 3.9559294917171086, 0.5005937703059423,
-        0.165472792106183, 0.10871584592508803, 1.8310845461902225, 8,
-        0.020609088437257533, 0.2887443425108735, 0.1410209600478508,
-        0.071711571237129, False, True, 1, 0.7421959492976916, False,
+        6.106501326327924, 0.5256891135165026, 1.3672741944106894, 0.7274105187796782, 1.14535435555878, 3,
+        0.06682068388674232, 0.013870087712047747, 0.249889783048155, 0.032635876707872234, True, True, 6,
+        0.8892829872491416, True,
     )),
     7: _builder_kwargs_from_optimizer_row((
-        0.04540362638082972, 1011, 3.1092503014448707, 0.8791966985366269,
-        0.8679274694780499, 0.10643457205221658, 0.5770695384492087, 8,
-        0.09463686137436042, 0.33231011755735657, 0.16306125647665523,
-        0.0017160053449274558, True, True, 1, 0.13807811554156435, True,
+        7.116888769886009, 0.7289981655377629, 0.4603085602769692, 0.3689880093118396, 4.7130775585359865, 2,
+        0.17018271443712157, 0.10615833482828443, 0.5023157446544768, 0.0886387104281635, True, True, 5,
+        0.7515885712089204, True,
     )),
     8: _builder_kwargs_from_optimizer_row((
-        0.07834198768264702, 1001, 0.6907455737670744, 0.9584070137803204,
-        1.717735999417759, 0.1441467033984189, 3.1825625871194623, 8,
-        0.028011552819308602, 0.21731102055912785, 0.10933900348106132,
-        0.05900292755622416, False, True, 0, 0.7834615425787234, True,
+        7.618148264912112, 0.6639606520497713, 0.7983152483309041, 0.30276960264247754, 4.030559854773017, 2,
+        0.2859517471439936, 0.06965407744112657, 0.552419107409047, 0.022263962523991456, True, True, 3,
+        0.3256759640980279, False,
+    )),
+    9: _builder_kwargs_from_optimizer_row((
+        4.830514211689886, 0.8498009781272136, 0.2341760492678853, 0.47352688279069455, 2.1015806529196013, 3,
+        0.04847992329718288, 0.3069766208772683, 0.9704615608663967, 0.000396162152668443, True, True, 4,
+        0.6344008608356021, True,
+    )),
+    10: _builder_kwargs_from_optimizer_row((
+        6.353369405193468, 0.7434956147057368, 0.1281014391336382, 0.32655880245142344, 4.985489866806982, 4,
+        0.06579324087694745, 0.29314687776231696, 0.1532076599122092, 0.08214825792562591, False, False, 3,
+        0.12278422433810095, True,
+    )),
+    11: _builder_kwargs_from_optimizer_row((
+        7.422983570150037, 0.989262527201425, 2.14274118060158, 0.12442459103366947, 0.5000857976034738, 4,
+        0.024567889698469254, 0.3979365013171724, 0.8513333723779887, 0.0682294608729182, False, False, 5,
+        0.8999821695409332, True,
     )),
 }
 
@@ -186,14 +227,14 @@ def _scale_builder(base: Mapping[str, Any], factor: float) -> Dict[str, Any]:
 
 
 SPECS: List[Spec] = [
-    Spec("baseline", "Baseline"),
+    Spec("baseline", "Alapbeállítás"),
     Spec(
         "prior_narrow",
         "Szűkebb prior",
         prior_overrides={
-            "R0": (0.85, 12.0),
-            "k": (0.3, 8.0),
-            "alpha": (0.05, 16.0),
+            "R0": (0.25, 6.0),
+            "k": (0.1, 24.0),
+            "alpha": (0.05, 24.0),
             "theta": (0.05, 16.0),
         },
     ),
@@ -201,10 +242,10 @@ SPECS: List[Spec] = [
         "prior_wide",
         "Tágabb prior",
         prior_overrides={
-            "R0": (0.01, 18.0),
-            "k": (0.01, 12.0),
-            "alpha": (0.01, 25.0),
-            "theta": (0.01, 25.0),
+            "R0": (0.00, 9.0),
+            "k": (0.01, 36.0),
+            "alpha": (0.01, 36.0),
+            "theta": (0.01, 24.0),
         },
     ),
 
@@ -212,15 +253,12 @@ SPECS: List[Spec] = [
         "bio_loose",
         "Enyhébb biológiai szűrés",
         requirements=[
-            "R0 * r < 3.6",
-            "alpha * theta > 0.8",
-            "alpha * theta < 33",
-            "sqrt(alpha) * theta < 24",
-            "R0 / k < 1.4",
-            "R0 * r / k < 0.5",
-            "(k / (k + R0 * r)) ^ k > 0.03",
-            "(k / (k + R0 * r)) ^ k < 0.97",
-            "((R0 * r) ^ (1 / alpha) - 1) / theta < 0.1200001",
+            "R0 * r < 3.3",
+            "alpha * theta > 13.5",
+            "alpha * theta < 66",
+            "(k / (k + R0)) ^ k > 0.23",
+            "(k / (k + R0 * r)) ^ k > 0.32",
+            "((R0 * r) ^ (1 / alpha) - 1) / theta < 0.06",
         ],
     ),
 
@@ -228,17 +266,15 @@ SPECS: List[Spec] = [
         "bio_strict",
         "Szigorúbb biológiai szűrés",
         requirements=[
-            "R0 * r < 2.4",
-            "alpha * theta > 1.2",
-            "alpha * theta < 24",
-            "sqrt(alpha) * theta < 17",
-            "R0 / k < 1.0",
-            "R0 * r / k < 0.32",
-            "(k / (k + R0 * r)) ^ k > 0.08",
-            "(k / (k + R0 * r)) ^ k < 0.92",
-            "((R0 * r) ^ (1 / alpha) - 1) / theta < 0.0800001",
+            "R0 * r < 2.7",
+            "alpha * theta > 16.5",
+            "alpha * theta < 54",
+            "(k / (k + R0)) ^ k > 0.27",
+            "(k / (k + R0 * r)) ^ k > 0.38",
+            "((R0 * r) ^ (1 / alpha) - 1) / theta < 0.045",
         ],
     ),
+
     Spec(
         "accept_loose",
         "Enyhébb elfogadási feltételek",
@@ -299,15 +335,139 @@ def make_parameters(spec: Spec) -> Parameters:
     return pars
 
 
+def _cast_accept_kwargs(kwargs: Mapping[str, Any]) -> Dict[str, Any]:
+    out = dict(kwargs)
+    if "kmax" in out:
+        out["kmax"] = int(round(float(out["kmax"])))
+    if "max_unions_to_keep" in out:
+        out["max_unions_to_keep"] = int(round(float(out["max_unions_to_keep"])))
+    for name in ("include_gap_windows", "include_union_windows", "include_global_total"):
+        if name in out:
+            out[name] = bool(out[name])
+    return out
+
+
+def _scenario_controls_starting(*, simulation_start: datetime, control_start: datetime) -> Scenario:
+    cps: List[ParameterChangePoint] = [ParameterChangePoint("r", simulation_start, "1.0")]
+    if control_start > simulation_start:
+        cps.append(ParameterChangePoint("r", control_start))
+    return Scenario(cps)
+
+
+def _run_final_snapshot(
+        *,
+        obs_points: Sequence[Tuple[datetime, int]],
+        pars: Parameters,
+        builder_kwargs: Mapping[str, Any],
+        num_trajectories: int,
+        chunk_size: int,
+        T_run: int,
+        max_cases: int,
+        max_workers: int,
+        T_grid: np.ndarray,
+        h: float,
+        H_pad: float,
+        min_required: Optional[int],
+        control_start: datetime,
+) -> SnapshotResult:
+    obs_sorted = sorted(list(obs_points), key=lambda x: x[0])
+    m = len(obs_sorted)
+    sim_start = min(t for t, _ in obs_sorted)
+    criteria = [IndexOffspringCriterion(3, 7)] + build_acceptance_inequalities(
+        obs_points=obs_sorted,
+        simulation_start=sim_start,
+        **_cast_accept_kwargs(builder_kwargs),
+    )
+
+    collectors = [
+        draws := DrawCollector(),
+        active_set := ActiveSetSizeCollector(obs_sorted[m - 1][0]),
+        infection_times := InfectionTimeCollector(),
+    ]
+    scenario = _scenario_controls_starting(simulation_start=sim_start, control_start=control_start)
+    sim = Simulator(
+        parameters=pars,
+        sampler=pars.create_latin_hypercube_sampler(),
+        start_date=sim_start,
+        scenario=scenario,
+        criteria=criteria,
+        collectors=collectors,
+        num_trajectories=num_trajectories,
+        chunk_size=chunk_size,
+        T_run=T_run,
+        max_cases=max_cases,
+        max_workers=max_workers,
+        min_required=min_required,
+    )
+    sim.run()
+
+    infection_times_2d = list(infection_times.infection_times)
+    stopped_pairs = active_set.active_sets
+    draws_array = np.asarray(draws, dtype=float)
+    if draws_array.ndim == 1 and draws_array.size:
+        draws_array = draws_array.reshape(1, -1)
+    R0s, ks, rs, alphas, thetas = draws_array.T
+    t_star = float((active_set.collection_date - sim.start_date).days)
+    control_day = float((control_start - sim.start_date).days)
+
+    T_fine, p_uncond_mean_fine, g_uncond_fine = rao_blackwell_uncond_over_post_full(
+        infection_times_2d,
+        stopped_pairs,
+        R0s,
+        rs,
+        ks,
+        alphas,
+        thetas,
+        T_max=float(T_grid[-1]),
+        t_star=t_star,
+        h=h,
+        H_pad=H_pad,
+        control_day=control_day,
+    )
+    p_uncond_mean = np.interp(T_grid, T_fine, p_uncond_mean_fine)
+    p_uncond_draws = rb_draws_uncond_full_to_grid(T_fine, g_uncond_fine, T_grid)
+
+    g_cond_inf, g_cond_quiet = rb_cond_components_post(
+        infection_times_2d,
+        stopped_pairs,
+        R0s,
+        rs,
+        ks,
+        alphas,
+        thetas,
+        T_grid,
+        t_star,
+        h=h,
+        control_day=control_day,
+    )
+    p_cond_mean = (g_cond_inf.mean() / g_cond_quiet.mean(axis=0)) if g_cond_quiet.size else np.full_like(T_grid, np.nan)
+    p_cond_draws = rb_draws_cond_from_components(g_cond_inf, g_cond_quiet) if g_cond_quiet.size else np.empty(
+        (0, T_grid.size))
+
+    return SnapshotResult(
+        m=m,
+        t_star=t_star,
+        T_grid=np.asarray(T_grid, dtype=float),
+        p_uncond_mean=p_uncond_mean,
+        p_cond_mean=p_cond_mean,
+        p_uncond_draws=p_uncond_draws,
+        p_cond_draws=p_cond_draws,
+        draws_array=draws_array,
+        infection_times_2d=infection_times_2d,
+        n_obs=int(sum(y for _, y in obs_sorted)),
+        next_T=None,
+        stopped_pairs=stopped_pairs,
+    )
+
+
 def run_spec(spec: Spec) -> Any:
     pars = make_parameters(spec)
     builder_kwargs = merge_dicts(BASELINE_BUILDER_KWARGS, spec.builder_overrides)
 
-    results = run_all_snapshots_per_m(
+    result = _run_final_snapshot(
         obs_points=OBS_POINTS,
         pars=pars,
-        builder_kwargs_by_m={SNAPSHOT_ID: builder_kwargs},
-        snapshots=(SNAPSHOT_ID,),
+        builder_kwargs=builder_kwargs,
         num_trajectories=NUM_TRAJECTORIES,
         chunk_size=CHUNK_SIZE,
         T_run=T_RUN,
@@ -317,8 +477,9 @@ def run_spec(spec: Spec) -> Any:
         h=H,
         H_pad=H_PAD,
         min_required=MIN_REQUIRED,
+        control_start=CONTROL_START,
     )
-    return results[-1]
+    return result
 
 
 def get_draws(result: Any) -> np.ndarray:
@@ -679,6 +840,25 @@ def slugify(s: str) -> str:
     return "".join(ch.lower() if ch.isalnum() else "_" for ch in s).strip("_")
 
 
+def hu_date_formatter(x: float, pos: int) -> str:
+    dt = mdates.num2date(x)
+    hu_month = {
+        1: "jan.",
+        2: "febr.",
+        3: "márc.",
+        4: "ápr.",
+        5: "máj.",
+        6: "jún.",
+        7: "júl.",
+        8: "aug.",
+        9: "szept.",
+        10: "okt.",
+        11: "nov.",
+        12: "dec.",
+    }
+    return f"{hu_month[dt.month]} {dt.day:02d}"
+
+
 # ============================================================
 # Summaries
 # ============================================================
@@ -776,8 +956,8 @@ def plot_rb_curves(results: Mapping[str, Any], out_path: Path, key: str = "p_con
     for spec in SPECS:
         t, y = rb_curve(results[spec.key], key=key)
         ax.plot(t, y, lw=2.0 if spec.key == "baseline" else 1.8, color=COLORS.get(spec.key), label=spec.title)
-    ax.set_xlabel(r"$T$ days since $t_\star$")
-    ax.set_ylabel("Probability")
+    ax.set_xlabel(r"$T$ nap a $t_\star$ időpont után")
+    ax.set_ylabel("Valószínűség")
     ax.set_ylim(0, 1.02)
     ax.set_xlim(0, np.max(T_GRID))
     ax.yaxis.grid(True, color="#eeeeee")
@@ -808,9 +988,9 @@ def plot_incidence_medians(results: Mapping[str, Any], out_path: Path) -> None:
     ax.scatter(obs_dates, obs_cums, s=24, facecolors="white", edgecolors="#000000", lw=1.0, zorder=10,
                label="Megfigyelt")
 
-    ax.set_ylabel("Cumulative infections")
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-    ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+    ax.set_ylabel("Kumulatív fertőzések")
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(hu_date_formatter))
+    ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO, interval=2))
     ax.yaxis.grid(True, color="#eeeeee")
     ax.xaxis.grid(False)
     ax.legend(frameon=False, ncol=2)
@@ -869,7 +1049,7 @@ def plot_posteriors_vs_baseline(results: Mapping[str, Any], out_path: Path) -> N
             base_pdf = kde_on_grid(posteriors[baseline_key][name], grid)
             alt_pdf = kde_on_grid(posteriors[spec.key][name], grid)
 
-            baseline_label = "Baseline" if i == 0 and j == 0 else None
+            baseline_label = "Alapbeállítás" if i == 0 and j == 0 else None
             alt_label = spec.title if j == 0 else None
             ax.plot(grid, base_pdf, color=COLORS[baseline_key], lw=1.8, label=baseline_label)
             ax.plot(grid, alt_pdf, color=COLORS[spec.key], lw=1.8, label=alt_label)
@@ -955,7 +1135,7 @@ def plot_posteriors_vs_baseline_quiet_for_T(
             base_pdf = kde_on_grid(posteriors[baseline_key][name], grid)
             alt_pdf = kde_on_grid(posteriors[spec.key][name], grid)
 
-            baseline_label = "Baseline" if i == 0 and j == 0 else None
+            baseline_label = "Alapbeállítás" if i == 0 and j == 0 else None
             alt_label = spec.title if j == 0 else None
             ax.plot(grid, base_pdf, color=COLORS[baseline_key], lw=1.8, label=baseline_label)
             ax.plot(grid, alt_pdf, color=COLORS[spec.key], lw=1.8, label=alt_label)
@@ -1004,10 +1184,11 @@ def main() -> None:
     write_csv(OUTPUT_DIR / "posterior_summary.csv", posterior_rows)
     write_latex_summary(OUTPUT_DIR / "summary_table.tex", raw_rows)
 
-    plot_rb_curves(results, OUTPUT_DIR / "figures" / "rb_curves.png", key="p_cond_mean")
-    plot_incidence_medians(results, OUTPUT_DIR / "figures" / "incidence_medians.png")
-    plot_posteriors_vs_baseline(results, OUTPUT_DIR / "figures" / "posterior_compare_all.png")
-    plot_posteriors_vs_baseline_quiet_for_T(results, OUTPUT_DIR / "figures" / "posterior_compare_all_quiet.png", T=10.0)
+    plot_rb_curves(results, OUTPUT_DIR / "figures" / "rb_curves 2.pdf", key="p_cond_mean")
+    plot_incidence_medians(results, OUTPUT_DIR / "figures" / "incidence_medians 2.pdf")
+    plot_posteriors_vs_baseline(results, OUTPUT_DIR / "figures" / "posterior_compare_all 2.pdf")
+    plot_posteriors_vs_baseline_quiet_for_T(results, OUTPUT_DIR / "figures" / "posterior_compare_all_quiet 2.pdf",
+                                            T=10.0)
 
     print(f"Done. Outputs written to: {OUTPUT_DIR.resolve()}")
 

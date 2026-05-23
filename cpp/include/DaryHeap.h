@@ -16,7 +16,7 @@ namespace eventide {
      *   - No thread-safety (intended per-worker).
      *   - No allocations after reserve_space().
      */
-    template <std::size_t D = 2>
+    template <typename T = double, std::size_t D = 2>
     class DaryHeap {
         static_assert(D >= 2, "D must be >= 2");
 
@@ -31,12 +31,12 @@ namespace eventide {
         bool empty() const noexcept { return data_.empty(); }
         size_type size() const noexcept { return data_.size(); }
 
-        const double& top() const {
+        const T& top() const {
             assert(!data_.empty());
             return data_.front();
         }
 
-        void push(const double v) {
+        void push(const T& v) {
             data_.push_back(v);
             sift_up(data_.size() - 1);
         }
@@ -54,15 +54,15 @@ namespace eventide {
         }
 
         // pop and return the smallest element
-        double pop_top() {
+        T pop_top() {
             assert(!data_.empty());
-            const double out = std::move(data_.front());
+            const T out = std::move(data_.front());
             pop();
             return out;
         }
 
     private:
-        std::vector<double> data_;
+        std::vector<T> data_;
 
         static constexpr size_type parent_of(const size_type i) noexcept { return (i - 1) / D; }
 

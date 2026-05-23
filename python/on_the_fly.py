@@ -92,8 +92,47 @@ def _count_pre_children_for_parents_fast(stopped_pairs_m, parents, t_star):
     return np.array([count_map.get(float(t), 0) for t in parents], dtype=int)
 
 
+def _effective_r_for_parent_times(parents: np.ndarray, r: float, control_day: Optional[float]) -> np.ndarray:
+    """Return per-parent r(t_parent) for a single trajectory.
+
+    Parameters
+    ----------
+    parents:
+        Parent infection times in *days since simulation start*.
+    r:
+        The sampled post-control reduction factor.
+    control_day:
+        Control start time in days since simulation start. If None, fall back to
+        the historical behavior used in the original RB code (index has r=1,
+        others have r).
+    """
+
+    parents = np.asarray(parents, dtype=float)
+    if control_day is None:
+        # Backwards-compatible behavior: index case (t≈0) has r=1, all others r.
+        is_index = np.isclose(parents, 0.0)
+        return np.where(is_index, 1.0, float(r))
+
+    # Time-varying controls: r=1.0 before controls, r after.
+    return np.where(parents < float(control_day), 1.0, float(r))
+
+
+def _post_snapshot_R(R0: float, r: float, t_star: float, control_day: Optional[float]) -> float:
+    """Effective reproduction number used after the snapshot horizon starts.
+
+    For the RB unconditional tail calculation we use a single post-snapshot
+    reproduction number: `R0` before controls start and `r * R0` once controls
+    are active at the snapshot time.
+    """
+
+    if control_day is not None and float(t_star) < float(control_day):
+        return float(R0)
+    return float(R0 * r)
+
+
 def rb_cond_components_post(
-        infection_times, stopped_pairs, R0s, rs, ks, alphas, thetas, T_grid, t_star, h=0.2
+        infection_times, stopped_pairs, R0s, rs, ks, alphas, thetas, T_grid, t_star, h=0.2,
+        control_day: Optional[float] = None,
 ):
     """
     Posterior-collapsed conditional components (Theorem RB-cond).
@@ -121,8 +160,8 @@ def rb_cond_components_post(
         FΔ = _interp_grid(F_g, xΔ)
         μpre = FΔ
         μinf = 1.0 - FΔ
-        is_index = np.isclose(parents, 0.0)
-        Reff_i = np.where(is_index, R0, R0 * r)
+        r_eff_i = _effective_r_for_parent_times(parents, r, control_day)
+        Reff_i = R0 * r_eff_i
         β_i = k / np.maximum(Reff_i, 1e-12)
         n_pre = _count_pre_children_for_parents_fast(stopped_pairs[m], parents, t_star)
         k_star = k + n_pre
@@ -141,7 +180,8 @@ def rb_cond_components_post(
 
 def rao_blackwell_uncond_over_post_full(
         infection_times, stopped_pairs, R0s, rs, ks, alphas, thetas,
-        T_max, t_star, h=0.2, H_pad=10.0
+        T_max, t_star, h=0.2, H_pad=10.0,
+        control_day: Optional[float] = None,
 ):
     """
     Posterior-collapsed RB unconditional; returns T_fine, mean curve, and per-draw matrix.
@@ -156,7 +196,7 @@ def rao_blackwell_uncond_over_post_full(
     at_cache = {k: gamma_cdf_grid(k[0], k[1], X_max, h) for k in at_keys}
     H_cache: Dict[Tuple[float, ...], np.ndarray] = {}
     for m in range(M):
-        R_post = float(R0s[m] * rs[m])
+        R_post = _post_snapshot_R(float(R0s[m]), float(rs[m]), float(t_star), control_day)
         keyH = (round(R_post, 6), round(float(ks[m]), 6), round(float(alphas[m]), 6),
                 round(float(thetas[m]), 6), h, round(T_max + H_pad, 6))
         if keyH not in H_cache:
@@ -174,7 +214,8 @@ def rao_blackwell_uncond_over_post_full(
         R0, r, k, a, th = map(float, (R0s[m], rs[m], ks[m], alphas[m], thetas[m]))
         keyAT = (round(a, 6), round(th, 6), h, round(X_max, 6))
         _, f_g, F_g = at_cache[keyAT]
-        keyH = (round(R0 * r, 6), round(k, 6), round(a, 6), round(th, 6), h, round(T_max + H_pad, 6))
+        R_post = _post_snapshot_R(R0, r, float(t_star), control_day)
+        keyH = (round(R_post, 6), round(k, 6), round(a, 6), round(th, 6), h, round(T_max + H_pad, 6))
         H = H_cache[keyH]
         gH = 1.0 - H
         gH[gH < 0] = 0.0
@@ -182,8 +223,8 @@ def rao_blackwell_uncond_over_post_full(
         xΔ = Δ / h
         F_Δ = _interp_grid(F_g, xΔ)
         μpre = F_Δ
-        is_index = np.isclose(parents, 0.0)
-        Reff_i = np.where(is_index, R0, R0 * r)
+        r_eff_i = _effective_r_for_parent_times(parents, r, control_day)
+        Reff_i = R0 * r_eff_i
         β_i = k / np.maximum(Reff_i, 1e-12)
         n_pre = _count_pre_children_for_parents_fast(stopped_pairs[m], parents, t_star)
         k_star = k + n_pre

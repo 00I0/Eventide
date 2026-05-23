@@ -52,7 +52,7 @@ def _kde_truncated_gaussian(x: np.ndarray, grid: np.ndarray, lo: float, hi: floa
 
     f[(grid < lo) | (grid > hi)] = 0.0
     mask = (grid >= lo) & (grid <= hi)
-    area = np.trapz(f[mask], grid[mask])
+    area = np.trapezoid(f[mask], grid[mask])
     if area > 0:
         f /= area
     return f

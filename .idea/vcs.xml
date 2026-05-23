@@ -7,6 +7,9 @@
     <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/libtcc-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/pybind11-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/tinycc-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-fast/_deps/boost_math-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-fast/_deps/exprtk-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-fast/_deps/pybind11-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/boost_math-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/exprtk-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/libtcc-src" vcs="Git" />
