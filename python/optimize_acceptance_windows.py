@@ -118,6 +118,9 @@ def build_acceptance_inequalities(
 
         # Finalization
         snap_to_days: bool = False,
+        observation_end: Optional[datetime] = None,
+        index_case_count: int = 0,
+        include_terminal_window: bool = False,
 ) -> List[IntervalCriterion]:
     """
     Generates acceptance criteria using both Cluster-Merging and Interpolant-Segmentation
@@ -132,6 +135,16 @@ def build_acceptance_inequalities(
     times = [t for t, _ in obs]
     counts = [c for _, c in obs]
     A, B = times[0], times[-1]
+    if observation_end is not None:
+        if observation_end <= B:
+            raise ValueError("observation_end must be after the final observation.")
+        B = observation_end
+    if index_case_count < 0 or index_case_count > counts[0] or int(index_case_count) != index_case_count:
+        raise ValueError("index_case_count must fit within the first observed batch.")
+    if index_case_count and A != simulation_start:
+        raise ValueError("The deterministic index must occur at simulation_start.")
+    counts[0] -= index_case_count
+    obs = list(zip(times, counts))
     n_total = int(sum(counts))
 
     def day_floor(t: datetime) -> datetime:
@@ -388,6 +401,17 @@ def build_acceptance_inequalities(
     for (s, e) in sorted_keys:
         L, U = candidate_bounds[(s, e)]
         final_list.append(IntervalCriterion(s, e, L, U))
+    if include_terminal_window and counts[-1] > 0:
+        half_days = float(norm.ppf(0.5 + beta / 2.0)) * float(sigma_days)
+        if len(times) > 1:
+            gap_days = (times[-1] - times[-2]).total_seconds() / 86400.0
+            half_days = max(half_days, neighbor_weight * gap_days / 2.0)
+        terminal_start = max(simulation_start, times[-1] - timedelta(days=half_days))
+        terminal_end = min(B, times[-1] + timedelta(days=max(half_days, 1.0)))
+        if terminal_start < terminal_end:
+            lower, upper = calculate_band(terminal_start, terminal_end)
+            lower = max(lower, counts[-1])
+            final_list.append(IntervalCriterion(terminal_start, terminal_end, lower, max(lower, upper)))
     return final_list
 
 

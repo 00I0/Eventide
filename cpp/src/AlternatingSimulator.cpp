@@ -106,10 +106,15 @@ void AlternatingSimulator::run() {
     numProcessedTrajectories_.store(0, std::memory_order_release);
 
     std::vector<RngEngine> rngs(maxWorkers_);
-    for (int i = 0; i < maxWorkers_; ++i) rngs[i] = RngEngine(RngEngine::defaultSeed() + i);
+    std::vector<RngEngine> vectorRngs(maxWorkers_);
+    const uint64_t seed = RngEngine::defaultSeed();
+    for (int i = 0; i < maxWorkers_; ++i) {
+        rngs[i] = RngEngine(seed + i);
+        vectorRngs[i] = RngEngine((seed ^ 0xd1b54a32d192ed03ULL) + i);
+    }
 
     auto hostSamplers = hostSamplerProto_.split(maxWorkers_, rngs);
-    auto vectorSamplers = vectorSamplerProto_.split(maxWorkers_, rngs);
+    auto vectorSamplers = vectorSamplerProto_.split(maxWorkers_, vectorRngs);
 
     struct WorkerCtx {
         std::unique_ptr<Sampler> hostSampler;

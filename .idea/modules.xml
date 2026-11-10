@@ -3,7 +3,8 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/Eventide.iml" filepath="$PROJECT_DIR$/.idea/Eventide.iml" />
-      <module fileurl="file://$PROJECT_DIR$/.idea/Eventide2.iml" filepath="$PROJECT_DIR$/.idea/Eventide2.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/pybind11.iml" filepath="$PROJECT_DIR$/.idea/pybind11.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/pybind11_tests.iml" filepath="$PROJECT_DIR$/.idea/pybind11_tests.iml" />
     </modules>
   </component>
 </project>

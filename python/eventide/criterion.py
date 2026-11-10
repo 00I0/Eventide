@@ -82,8 +82,8 @@ class IntervalCriterion(Criterion):
             simulation_start_date: datetime start of simulation.
         """
         return _IntervalCriterion(
-            (self.__start_date - simulation_start_date).days,
-            (self.__end_date - simulation_start_date).days,
+            (self.__start_date - simulation_start_date).total_seconds() / 86400.0,
+            (self.__end_date - simulation_start_date).total_seconds() / 86400.0,
             self.__min_cases,
             self.__max_cases
         )

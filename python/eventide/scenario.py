@@ -34,7 +34,7 @@ class ParameterChangePoint:
         Args:
             simulation_start_date: datetime start of simulation.
         """
-        change_time = (self.__change_date - simulation_start_date).days
+        change_time = (self.__change_date - simulation_start_date).total_seconds() / 86400.0
 
         if self.__expr is None:
             return _ParameterChangePoint(change_time, self.__parameter_name)
